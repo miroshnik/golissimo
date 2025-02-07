@@ -3,6 +3,9 @@
 	"name": "golissimo",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-02-04",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
 	"observability": {
 		"enabled": true
 	},
@@ -14,8 +17,15 @@
 	"kv_namespaces": [
 		{
 			"binding": "KV",
-			"id": "16f18f594cfa4544b2f076dea0a61994",
-			"preview_id": "16f18f594cfa4544b2f076dea0a61994"
+			"id": "16f18f594cfa4544b2f076dea0a61994"
+		},
+		{
+			"binding": "PROCESSED_POSTS_KV",
+			"id": "8a5ee4d157b04749adb2225133e5f478",
+			"preview_id": "b6366c2af416423e86d1b3b2f0325274"
 		}
-	]
+	],
+	"browser": {
+		"binding": "BROWSER"
+	}
 }

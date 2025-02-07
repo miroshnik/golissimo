@@ -15,5 +15,9 @@
     "typescript": "^5.5.2",
     "vitest": "2.1.8",
     "wrangler": "^3.107.3"
+  },
+  "dependencies": {
+    "@cloudflare/puppeteer": "^0.0.14",
+    "@google/generative-ai": "^0.21.0"
   }
 }

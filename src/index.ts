@@ -2,7 +2,6 @@ import puppeteer from '@cloudflare/puppeteer';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 interface Env {
-	KV: KVNamespace;
 	PROCESSED_POSTS_KV: KVNamespace;
 
 	BROWSER: Fetcher;
@@ -24,11 +23,15 @@ const prompt = `мне нужен ответ в виде хештегов чер
 строка: `;
 
 export default {
-	async fetch (request, env): Promise<Response> {
-		return Response.json(await env.KV.list());
+	async fetch (request, env, ctx): Promise<Response> {
+		console.log(request);
+
+		return Response.json(await env.PROCESSED_POSTS_KV.list());
 	},
 
 	async scheduled (event, env) {
+		console.log(event);
+
 		try {
 			const genAI = new GoogleGenerativeAI(env.GOOGLE_GEMINI_API_KEY);
 			const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
@@ -50,7 +53,7 @@ export default {
 				const title = item.data.title;
 				let videoUrl = item.data.media?.reddit_video?.fallback_url || item.data.url;
 
-				if (await env.KV.get(id)) {
+				if (await env.PROCESSED_POSTS_KV.get(id)) {
 					continue;
 				}
 
@@ -90,7 +93,6 @@ export default {
 						continue;
 					}
 
-					await env.KV.put(id, videoUrl, { expirationTtl: 24 * 60 * 60 }); // store for 1 day (in seconds)
 					await env.PROCESSED_POSTS_KV.put(id, videoUrl, { expirationTtl: 24 * 60 * 60 }); // store for 1 day (in seconds)
 				}
 			}

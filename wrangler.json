@@ -11,14 +11,10 @@
 	},
 	"triggers": {
 		"crons": [
-			"*/2 * * * *"
+			"* * * * *"
 		]
 	},
 	"kv_namespaces": [
-		{
-			"binding": "KV",
-			"id": "16f18f594cfa4544b2f076dea0a61994"
-		},
 		{
 			"binding": "PROCESSED_POSTS_KV",
 			"id": "8a5ee4d157b04749adb2225133e5f478",

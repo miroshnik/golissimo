@@ -13,7 +13,18 @@ interface Env {
 
 export default {
 	async fetch (request, env, ctx): Promise<Response> {
-		return Response.json(await env.PROCESSED_POSTS_KV.list());
+		const prompt = `Extract hashtags from a match event string. Format:
+ - Teams first, then players.
+ - Only letters in hashtags.
+ - Event-related hashtags (e.g., VAR, Goal, RedCard, Penalty, Injury, OG for own goal, Interview).
+ - If only a surname or team is present, include only relevant hashtags.
+
+Return a result only (a string with hashtags).
+Try it to be short with only main hashtags.
+
+Input: `;
+
+		return Response.json(await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { prompt, max_tokens: 100 }));
 	},
 
 	async scheduled (event, env) {

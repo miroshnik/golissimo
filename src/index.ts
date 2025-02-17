@@ -1,26 +1,15 @@
 import puppeteer from '@cloudflare/puppeteer';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 
 interface Env {
 	PROCESSED_POSTS_KV: KVNamespace;
 
 	BROWSER: Fetcher;
 
-	GOOGLE_GEMINI_API_KEY: string;
+	AI: Ai,
+
 	TELEGRAM_CHAT_ID: string;
 	TELEGRAM_BOT_TOKEN: string;
 }
-
-const prompt = `мне нужен ответ в виде хештегов через пробел для строки о событии в матче, где будут команды и игроки или игрок, если он один;
-пример: для строки "Metz 1-0 Grenoble - Pape Amadou Diallo 42'" ответ будет: #Metz #Grenoble #PapeAmadouDiallo;
-пример: для строки "Léo Pelé (Athletico-PR) faces racist insults after being sent off against Coritiba" ответ будет: #AthleticoPR #Coritiba #LéoPelé;
-так же нужны теги для самого события, типа ВАР, удаление, пенальти, красная карта, гол, травма и т.д.; OG - own goal;
-пример: Milan 2-2 Parma - Strahinja Pavlović VAR Disallow -> #Milan #Parma #StrahinjaPavlović #VAR #GoalDiasallowed;
-в хештегах должны быть только буквы;
-если есть только фамилия игрока или только клуб, то нужны только соответствующие хештеги;
-сначала команды, потом игроки;
-ответ только на английском;
-строка: `;
 
 export default {
 	async fetch (request, env, ctx): Promise<Response> {
@@ -29,9 +18,6 @@ export default {
 
 	async scheduled (event, env) {
 		try {
-			const genAI = new GoogleGenerativeAI(env.GOOGLE_GEMINI_API_KEY);
-			const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
-
 			const response = await fetch('https://www.reddit.com/r/soccer/new.json?limit=25', {
 				headers: { 'User-Agent': 'Mozilla/5.0' }
 			});
@@ -68,11 +54,22 @@ export default {
 				console.log(`Video URL: ${videoUrl}, ID: ${id}`);
 
 				if (videoUrl) {
+					const prompt = `Extract hashtags from a match event string. Format:
+ - Teams first, then players.
+ - Only letters in hashtags.
+ - Event-related hashtags (e.g., VAR, Goal, RedCard, Penalty, Injury, OG for own goal, Interview).
+ - If only a surname or team is present, include only relevant hashtags.
+
+Return a result only (a string with hashtags).
+Try it to be short with only main hashtags.
+
+Input: `;
+
 					let message = `${title} <a href="${videoUrl}">↗</a>`;
 					if ((videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) && !videoUrl.includes('DASH_96.')) {
 						message += ` <a href="https://demo.meshkov.info/video?url=${encodeURIComponent(videoUrl)}">▷</a>`;
 					}
-					message += `\n${(await model.generateContent(prompt + title)).response.text()}`;
+					message += `\n${await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { prompt, max_tokens: 100 })}`;
 
 					const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 						method: 'POST',
@@ -93,7 +90,7 @@ export default {
 
 					await env.PROCESSED_POSTS_KV.put(id, '0', { expirationTtl: 24 * 60 * 60 }); // store for 1 day (in seconds)
 				} else {
-					await env.PROCESSED_POSTS_KV.put(id, (retriesLeft-1).toString(), { expirationTtl: 24 * 60 * 60 }); // store for 1 day (in seconds)
+					await env.PROCESSED_POSTS_KV.put(id, (retriesLeft - 1).toString(), { expirationTtl: 24 * 60 * 60 }); // store for 1 day (in seconds)
 				}
 			}
 		} catch (error) {

@@ -17,7 +17,6 @@
     "wrangler": "^3.107.3"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "^0.0.14",
-    "@google/generative-ai": "^0.21.0"
+    "@cloudflare/puppeteer": "^0.0.14"
   }
 }

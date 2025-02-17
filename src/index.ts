@@ -60,6 +60,10 @@ export default {
  - Event-related hashtags (e.g., VAR, Goal, RedCard, Penalty, Injury, OG for own goal, Interview).
  - If only a surname or team is present, include only relevant hashtags.
 
+Example:
+Input: Annecy 1-0 Caen - Yohann Demoncy 13'
+Output: #Annecy #Caen #YohannDemoncy
+
 Return a result only (a string with hashtags).
 Try it to be short with only main hashtags.
 

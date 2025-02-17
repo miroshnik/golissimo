@@ -70,7 +70,7 @@ Input: `;
 						message += ` <a href="https://demo.meshkov.info/video?url=${encodeURIComponent(videoUrl)}">▷</a>`;
 					}
 
-					const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { prompt, max_tokens: 100 });
+					const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { prompt: prompt + title, max_tokens: 100 });
 
 					// @ts-ignore
 					message += `\n${(aiResponse?.response ?? '')}`;

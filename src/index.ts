@@ -13,18 +13,7 @@ interface Env {
 
 export default {
 	async fetch (request, env, ctx): Promise<Response> {
-		const prompt = `Extract hashtags from a match event string. Format:
- - Teams first, then players.
- - Only letters in hashtags.
- - Event-related hashtags (e.g., VAR, Goal, RedCard, Penalty, Injury, OG for own goal, Interview).
- - If only a surname or team is present, include only relevant hashtags.
-
-Return a result only (a string with hashtags).
-Try it to be short with only main hashtags.
-
-Input: `;
-
-		return Response.json(await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { prompt, max_tokens: 100 }));
+		return Response.json(await env.PROCESSED_POSTS_KV.list());
 	},
 
 	async scheduled (event, env) {
@@ -80,7 +69,11 @@ Input: `;
 					if ((videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) && !videoUrl.includes('DASH_96.')) {
 						message += ` <a href="https://demo.meshkov.info/video?url=${encodeURIComponent(videoUrl)}">▷</a>`;
 					}
-					message += `\n${await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { prompt, max_tokens: 100 })}`;
+
+					const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { prompt, max_tokens: 100 });
+
+					// @ts-ignore
+					message += `\n${(aiResponse?.response ?? '')}`;
 
 					const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 						method: 'POST',

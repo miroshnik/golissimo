@@ -58,11 +58,10 @@ export default {
  - Teams first, then players.
  - Only letters in hashtags.
  - Event-related hashtags (e.g., VAR, Goal, RedCard, Penalty, Injury, OG for own goal, Interview).
- - If only a surname or team is present, include only relevant hashtags.
 
 Examples:
 Input: Annecy 1-0 Caen - Yohann Demoncy 13'
-Output: #Annecy #Caen #YohannDemoncy
+Output: #Annecy #Caen #YohannDemoncy #Goal
 
 Input: Rayo Vallecano disallowed goal against Barcelona 42'
 Output: #RayoVallecano #Barcelona #GoalDisallowed
@@ -77,7 +76,12 @@ Input: `;
 						message += ` <a href="https://demo.meshkov.info/video?url=${encodeURIComponent(videoUrl)}">▷</a>`;
 					}
 
-					const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { prompt: prompt + title, max_tokens: 100 });
+					const aiResponse = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+						prompt: prompt + title,
+						max_tokens: 100
+					});
+
+					console.log({ aiResponse });
 
 					// @ts-ignore
 					message += `\n${(aiResponse?.response ?? '')}`;

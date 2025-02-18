@@ -2,8 +2,8 @@
 
 interface Env {
 	PROCESSED_POSTS_KV: KVNamespace;
-	GOOGLE_GEMINI_API_KEY: string;
 	TELEGRAM_CHAT_ID: string;
 	TELEGRAM_BOT_TOKEN: string;
 	BROWSER: Fetcher;
+	AI: Ai;
 }

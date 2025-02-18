@@ -57,7 +57,7 @@ export default {
 					const prompt = `Extract hashtags from a match event string. Format:
  - Teams first, then players.
  - Only letters in hashtags.
- - Event-related hashtags (e.g., VAR, Goal, RedCard, Penalty, Injury, OG for own goal, Interview).
+ - Event-related hashtags (e.g., VAR, Goal, RedCard, Penalty, Injury, Interview, etc.).
 
 Examples:
 Input: Annecy 1-0 Caen - Yohann Demoncy 13'

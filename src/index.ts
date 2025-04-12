@@ -63,6 +63,9 @@ Examples:
 Input: Annecy 1-0 Caen - Yohann Demoncy 13'
 Output: #Annecy #Caen #YohannDemoncy #Goal
 
+Input: Annecy 1-0 Caen - Y. Demoncy 13'
+Output: #Annecy #Caen #YDemoncy #Goal
+
 Input: Rayo Vallecano disallowed goal against Barcelona 42'
 Output: #RayoVallecano #Barcelona #GoalDisallowed
 
@@ -119,26 +122,21 @@ Input: `;
 
 const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | null> => {
 	const browser = await puppeteer.launch(env.BROWSER);
+
 	const page = await browser.newPage();
-	await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
 
-	let hlsUrl: string | null = null;
-	let mp4Url: string | null = null;
+	await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36');
 
+	let finalStreamUrl: string | null = null;
 	try {
 		await page.setRequestInterception(true);
 
 		page.on('request', async (request) => {
 			const url = request.url();
 
-			if (!hlsUrl && url.endsWith('.m3u8')) {
-				console.log(`🎯 HLS stream found: ${url}`);
-				hlsUrl = url;
-				await request.abort(); // можно не продолжать
-			} else if (!mp4Url && url.endsWith('.mp4') && !url.includes('DASH_96')) {
-				console.log(`📼 MP4 stream found: ${url}`);
-				mp4Url = url;
-				await request.abort();
+			if (!finalStreamUrl && ((url.includes('.m3u8') || url.includes('.mp4')) && !url.includes('DASH_96.'))) {
+				console.log(`Video stream found: ${url}`);
+				finalStreamUrl = url;
 			} else {
 				await request.continue();
 			}
@@ -148,10 +146,11 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 		await page.waitForSelector('video source', { timeout: 3000 }); // Waiting for video.stream element
 
-		return hlsUrl ?? mp4Url;
+		return finalStreamUrl;
 	} catch (error) {
 		console.error(`Stream processing fail for ${streamUrl}:`, error);
-		return hlsUrl ?? mp4Url;
+
+		return finalStreamUrl;
 	} finally {
 		await browser.close();
 	}

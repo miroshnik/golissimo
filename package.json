@@ -17,6 +17,6 @@
     "wrangler": "^3.109.1"
   },
   "dependencies": {
-    "@cloudflare/puppeteer": "^0.0.14"
+    "@cloudflare/puppeteer": "^1.0.1"
   }
 }

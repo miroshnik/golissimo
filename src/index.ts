@@ -54,25 +54,31 @@ export default {
 				console.log(`Video URL: ${videoUrl}, ID: ${id}`);
 
 				if (videoUrl) {
-					const prompt = `Extract hashtags from a match event string. Format:
- - Teams first, then players.
- - Only letters in hashtags.
- - Event-related hashtags (e.g., VAR, Goal, RedCard, Penalty, Injury, Interview, etc.).
+					const prompt = `
+Extract hashtags from a match event string.
+
+Rules:
+- Only include team names and player names (with letters only, no numbers or symbols).
+- Add relevant event hashtags (e.g. #Goal, #RedCard, #Penalty, #Injury, #VAR, etc.).
+- First teams, then players, then event type.
+- If there are no teams or players, return nothing at all (not even event tags).
+- Return only hashtags, space-separated. No comments, no extra text.
 
 Examples:
 Input: Annecy 1-0 Caen - Yohann Demoncy 13'
 Output: #Annecy #Caen #YohannDemoncy #Goal
 
-Input: Annecy 1-0 Caen - Y. Demoncy 13'
-Output: #Annecy #Caen #YDemoncy #Goal
-
 Input: Rayo Vallecano disallowed goal against Barcelona 42'
 Output: #RayoVallecano #Barcelona #GoalDisallowed
 
-Return a result only (a string with hashtags).
-Try it to be short with only main hashtags.
+Input: Choreography Display During Hammarby IF vs Djurgårdens IF Match
+Output: #HammarbyIF #DjurgardensIF #ChoreographyDisplay
 
-Input: `;
+Input: Final whistle
+Output:
+
+Input:
+`;
 
 					let message = `${title} <a href="${videoUrl}">↗</a>`;
 					if ((videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) && !videoUrl.includes('DASH_96.')) {

@@ -23,8 +23,5 @@
 	],
 	"browser": {
 		"binding": "BROWSER"
-	},
-	"ai": {
-		"binding": "AI"
 	}
 }

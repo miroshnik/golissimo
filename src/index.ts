@@ -2,11 +2,8 @@ import puppeteer from '@cloudflare/puppeteer';
 
 interface Env {
 	PROCESSED_POSTS_KV: KVNamespace;
-
 	BROWSER: Fetcher;
-
-	AI: Ai,
-
+	GEMINI_API_KEY: string;
 	TELEGRAM_CHAT_ID: string;
 	TELEGRAM_BOT_TOKEN: string;
 }
@@ -24,7 +21,6 @@ export default {
 
 			if (!response.ok) {
 				console.error(`Posts fetch error: ${response.status} ${response.statusText}`);
-
 				return;
 			}
 
@@ -35,18 +31,15 @@ export default {
 				const title = item.data.title;
 				let videoUrl = item.data.media?.reddit_video?.fallback_url || item.data.url;
 
-				const retriesLeft = Number(await env.PROCESSED_POSTS_KV.get(id) ?? 5); // 5 retries
-
-				if (retriesLeft <= 0) {
-					continue;
-				}
+				const retriesLeft = Number(await env.PROCESSED_POSTS_KV.get(id) ?? 5);
+				if (retriesLeft <= 0) continue;
 
 				console.log(`ID: ${id}, Title: ${title}. Processing.`);
 
 				if (videoUrl && !(
 					videoUrl.includes('youtube') || videoUrl.includes('youtu.be') || videoUrl.includes('.jpeg') || videoUrl.includes('.png')
-					|| ((videoUrl.includes('.m3u8') || videoUrl.includes('.mp4')) && !videoUrl.includes('DASH_96.')))
-				) {
+					|| ((videoUrl.includes('.m3u8') || videoUrl.includes('.mp4')) && !videoUrl.includes('DASH_96.'))
+				)) {
 					console.log(`Open ${videoUrl} in browser...`);
 					videoUrl = await getFinalStreamUrl(env, videoUrl);
 				}
@@ -85,18 +78,24 @@ Input:
 						message += ` <a href="https://demo.meshkov.info/video?url=${encodeURIComponent(videoUrl)}">▷</a>`;
 					}
 
-					const aiResponse = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-						max_tokens: 100,
-						messages: [{
-							role: 'user',
-							content: prompt + title
-						}]
+					const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify({
+							contents: [
+								{
+									role: 'user',
+									parts: [{ text: prompt + title }]
+								}
+							]
+						})
 					});
 
-					console.log({ aiResponse });
-
-					// @ts-ignore
-					message += `\n${(aiResponse?.response ?? '')}`;
+					const geminiJson = await geminiResponse.json() as any;
+					const aiText = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+					message += `\n${aiText}`;
 
 					const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 						method: 'POST',
@@ -115,9 +114,9 @@ Input:
 						continue;
 					}
 
-					await env.PROCESSED_POSTS_KV.put(id, '0', { expirationTtl: 24 * 60 * 60 }); // store for 1 day (in seconds)
+					await env.PROCESSED_POSTS_KV.put(id, '0', { expirationTtl: 86400 });
 				} else {
-					await env.PROCESSED_POSTS_KV.put(id, (retriesLeft - 1).toString(), { expirationTtl: 24 * 60 * 60 }); // store for 1 day (in seconds)
+					await env.PROCESSED_POSTS_KV.put(id, (retriesLeft - 1).toString(), { expirationTtl: 86400 });
 				}
 			}
 		} catch (error) {
@@ -128,7 +127,6 @@ Input:
 
 const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | null> => {
 	const browser = await puppeteer.launch(env.BROWSER);
-
 	const page = await browser.newPage();
 
 	await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36');
@@ -139,7 +137,6 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 		page.on('request', async (request) => {
 			const url = request.url();
-
 			if (!finalStreamUrl && ((url.includes('.m3u8') || url.includes('.mp4')) && !url.includes('DASH_96.'))) {
 				console.log(`Video stream found: ${url}`);
 				finalStreamUrl = url;
@@ -149,13 +146,10 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 		});
 
 		await page.goto(streamUrl, { waitUntil: 'domcontentloaded' });
-
-		await page.waitForSelector('video source', { timeout: 3000 }); // Waiting for video.stream element
-
+		await page.waitForSelector('video source', { timeout: 3000 });
 		return finalStreamUrl;
 	} catch (error) {
 		console.error(`Stream processing fail for ${streamUrl}:`, error);
-
 		return finalStreamUrl;
 	} finally {
 		await browser.close();

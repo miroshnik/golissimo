@@ -48,29 +48,19 @@ export default {
 
 				if (videoUrl) {
 					const prompt = `
-Extract hashtags from a match event string.
+					Дай только хештеги (через пробел) из этой строки матча:
+Mainz 0-[1] Wolfsburg - Maximilian Arnold 3' ↗ ▷
 
-Rules:
-- Only include team names and player names (with letters only, no numbers or symbols).
-- Add relevant event hashtags (e.g. #Goal, #RedCard, #Penalty, #Injury, #VAR, etc.).
-- First teams, then players, then event type.
-- If there are no teams or players, return nothing at all (not even event tags).
-- Return only hashtags, space-separated. No comments, no extra text.
+Правила:
+- Только названия команд и игроков (только буквы).
+- Добавь релевантный тег события (#Goal и т.п.).
+- Сначала команды, потом игроки, потом событие.
+- Если нет команд/игроков — вообще ничего не возвращай.
 
-Examples:
-Input: Annecy 1-0 Caen - Yohann Demoncy 13'
-Output: #Annecy #Caen #YohannDemoncy #Goal
+Без кода. Только хештеги. Пример:
+Annecy 1-0 Caen - Yohann Demoncy 13'
+→ #Annecy #Caen #YohannDemoncy #Goal
 
-Input: Rayo Vallecano disallowed goal against Barcelona 42'
-Output: #RayoVallecano #Barcelona #GoalDisallowed
-
-Input: Choreography Display During Hammarby IF vs Djurgårdens IF Match
-Output: #HammarbyIF #DjurgardensIF #ChoreographyDisplay
-
-Input: Final whistle
-Output:
-
-Input:
 `;
 
 					let message = `${title} <a href="${videoUrl}">↗</a>`;
@@ -94,6 +84,9 @@ Input:
 					});
 
 					const geminiJson = await geminiResponse.json() as any;
+
+					console.log(geminiJson);
+
 					const aiText = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
 					message += `\n${aiText}`;
 

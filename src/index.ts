@@ -1,10 +1,14 @@
-// Small logging helpers
+// Small logging helpers (logfmt to avoid UI redaction noise)
 const log = (event: string, data?: Record<string, unknown>) => {
-	try {
-		console.log(JSON.stringify({ event, ...(data || {}) }));
-	} catch {
-		console.log(event);
+	const parts: string[] = [`evt=${event}`];
+	if (data) {
+		for (const [k, v] of Object.entries(data)) {
+			let val = String(v ?? '');
+			val = val.replace(/\s+/g, '_').slice(0, 160);
+			parts.push(`${k}=${val}`);
+		}
 	}
+	console.log(parts.join(' '));
 };
 
 const shortUrl = (u: string | null): string | null => {

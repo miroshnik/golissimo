@@ -18,8 +18,11 @@ export default {
 			const data = await fetchRedditNew(env);
 			if (!data) return;
 
+			const processedThisRun = new Set<string>();
+
 			for (const item of data.data.children.filter((post: any) => post.data.link_flair_text === 'Media').reverse()) {
 				const key = derivePostKey(item);
+				if (processedThisRun.has(key)) continue;
 				const title = item.data.title;
 				let videoUrl = item.data.media?.reddit_video?.fallback_url || item.data.url;
 
@@ -45,6 +48,14 @@ export default {
 				console.log(`Video URL: ${videoUrl}, Key: ${key}`);
 
 				if (videoUrl) {
+					const mediaKey = `media:${canonicalizeUrl(videoUrl)}`;
+					if (processedThisRun.has(mediaKey) || (await env.PROCESSED_POSTS_KV.get(mediaKey))) {
+						// Mark post as processed to avoid future retries for the same duplicate
+						await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
+						continue;
+					}
+
+					processedThisRun.add(mediaKey);
 					const prompt = `
 					Извлеки хештеги из строки
 Только хештеги, через пробел. Никаких комментариев и кода.
@@ -110,6 +121,7 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 					}
 
 					await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
+					await env.PROCESSED_POSTS_KV.put(mediaKey, '1', { expirationTtl: 604800 });
 				} else {
 					await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
 				}
@@ -155,6 +167,21 @@ const fetchRedditNew = async (env: Env): Promise<any | null> => {
 		return null;
 	}
 	return response.json();
+};
+
+const canonicalizeUrl = (rawUrl: string): string => {
+	try {
+		const u = new URL(rawUrl);
+		// Strip query/hash and unify hostname case
+		u.search = '';
+		u.hash = '';
+		u.hostname = u.hostname.toLowerCase();
+		// Optionally normalize trailing slashes
+		u.pathname = u.pathname.replace(/\/+$/, '');
+		return `${u.protocol}//${u.hostname}${u.pathname}`;
+	} catch {
+		return rawUrl;
+	}
 };
 
 const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | null> => {

@@ -11,6 +11,20 @@ interface Env {
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
+		if (url.pathname === '/admin/kv/clear') {
+			if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 });
+			const token = request.headers.get('x-admin-token') || '';
+			if (token !== env.TELEGRAM_BOT_TOKEN) return new Response('Unauthorized', { status: 401 });
+			const prefix = url.searchParams.get('prefix') || '';
+			if (!prefix) return new Response('Bad Request: prefix required (post:, media:, all)', { status: 400 });
+			if (prefix === 'all') {
+				const deletedPosts = await clearKvPrefix(env, 'post:');
+				const deletedMedia = await clearKvPrefix(env, 'media:');
+				return Response.json({ deleted: deletedPosts + deletedMedia, details: { post: deletedPosts, media: deletedMedia } });
+			}
+			const deleted = await clearKvPrefix(env, prefix);
+			return Response.json({ deleted, prefix });
+		}
 		if (url.pathname === '/player') {
 			const video = url.searchParams.get('video') || '';
 			const audio = url.searchParams.get('audio') || '';
@@ -221,6 +235,21 @@ const derivePostKey = (item: any): string => {
 		}
 	} catch {}
 	return `post:${raw}`;
+};
+
+const clearKvPrefix = async (env: Env, prefix: string): Promise<number> => {
+	let cursor: string | undefined = undefined;
+	let total = 0;
+	while (true) {
+		const l: KVNamespaceListResult<unknown, string> = await env.PROCESSED_POSTS_KV.list({ prefix, cursor });
+		if (l.keys.length) {
+			await Promise.all(l.keys.map((k: KVNamespaceListKey<unknown, string>) => env.PROCESSED_POSTS_KV.delete(k.name)));
+			total += l.keys.length;
+		}
+		if (l.list_complete) break;
+		cursor = l.cursor;
+	}
+	return total;
 };
 
 const fetchRedditNew = async (env: Env): Promise<any | null> => {

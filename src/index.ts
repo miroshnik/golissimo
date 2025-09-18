@@ -24,7 +24,7 @@ export default {
 				const key = derivePostKey(item);
 				if (processedThisRun.has(key)) continue;
 				const title = item.data.title;
-				let videoUrl = item.data.media?.reddit_video?.fallback_url || item.data.url;
+				let videoUrl = extractBestMediaUrl(item.data);
 
 				// Skip immediately if post already fully processed previously
 				const retriesLeft = Number((await env.PROCESSED_POSTS_KV.get(key)) ?? 5);
@@ -194,6 +194,44 @@ const canonicalizeUrl = (rawUrl: string): string => {
 		return rawUrl;
 	}
 };
+
+const extractBestMediaUrl = (d: any): string | null => {
+	// 1) Native Reddit video
+	const video = d?.media?.reddit_video?.fallback_url;
+	if (video) return String(video);
+
+	// 2) Gallery posts (multiple images)
+	if (d?.is_gallery && d?.gallery_data?.items && d?.media_metadata) {
+		for (const it of d.gallery_data.items as any[]) {
+			const meta = d.media_metadata?.[it.media_id];
+			if (!meta) continue;
+			// Prefer original (s), fallback to largest preview (p)
+			const src = meta.s?.u || meta.s?.gif || (Array.isArray(meta.p) && meta.p.length ? meta.p[meta.p.length - 1]?.u : null);
+			if (src) return decodeRedditUrl(String(src));
+		}
+	}
+
+	// 3) Preview (image/gif/mp4)
+	const pimg = d?.preview?.images?.[0];
+	if (pimg) {
+		const mp4 = pimg.variants?.mp4?.source?.url;
+		if (mp4) return decodeRedditUrl(String(mp4));
+		const gif = pimg.variants?.gif?.source?.url;
+		if (gif) return decodeRedditUrl(String(gif));
+		const src = pimg.source?.url;
+		if (src) return decodeRedditUrl(String(src));
+	}
+
+	// 4) Overridden URL or direct image
+	const overridden = d?.url_overridden_by_dest;
+	if (overridden) return String(overridden);
+	const url = d?.url;
+	if (url && /(\.jpe?g|\.png|\.gif|\.mp4|\.m3u8)(\?|$)/i.test(url)) return String(url);
+
+	return null;
+};
+
+const decodeRedditUrl = (u: string): string => u.replace(/&amp;/g, '&');
 
 const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | null> => {
 	const browser = await puppeteer.launch(env.BROWSER);

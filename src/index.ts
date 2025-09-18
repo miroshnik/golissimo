@@ -10,6 +10,48 @@ interface Env {
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
+		const url = new URL(request.url);
+		if (url.pathname === '/player') {
+			const video = url.searchParams.get('video') || '';
+			const audio = url.searchParams.get('audio') || '';
+			const html = `<!doctype html>
+			<html lang="en">
+			<head>
+			<meta charset="utf-8" />
+			<meta name="viewport" content="width=device-width, initial-scale=1" />
+			<title>Player</title>
+			<style>
+				html, body { margin:0; padding:0; background:#000; height:100%; width:100%; }
+				#wrap { position:fixed; inset:0; }
+				video { height:100%; width:100%; object-fit:contain; background:#000; display:block; }
+			</style>
+			</head>
+			<body>
+				<div id="wrap">
+					<video id="v" playsinline controls preload="metadata" src="${escapeHtml(video)}"></video>
+					<audio id="a" preload="metadata" src="${escapeHtml(audio)}" ${audio ? '' : 'style="display:none"'}></audio>
+				</div>
+				<script>
+				(function(){
+					const v = document.getElementById('v');
+					const a = document.getElementById('a');
+					if (!a.src) return;
+					let syncing = false;
+					function sync(from, to){
+						if (syncing) return; syncing = true; try { to.currentTime = from.currentTime; } catch(e){}
+						setTimeout(()=>{ syncing = false; }, 0);
+					}
+					v.addEventListener('play', ()=>{ a.play().catch(()=>{}); sync(v,a); });
+					v.addEventListener('pause', ()=>{ a.pause(); });
+					v.addEventListener('seeking', ()=> sync(v,a));
+					v.addEventListener('ratechange', ()=>{ a.playbackRate = v.playbackRate; });
+					a.addEventListener('seeking', ()=> sync(a,v));
+				})();
+				</script>
+			</body>
+			</html>`;
+			return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+		}
 		return Response.json(await env.PROCESSED_POSTS_KV.list());
 	},
 
@@ -25,6 +67,15 @@ export default {
 				if (processedThisRun.has(key)) continue;
 				const title = item.data.title;
 				let videoUrl = extractBestMediaUrl(item.data);
+				let audioUrl: string | null = null;
+				// Try prefer hls_url (muxed av) if available under media.reddit_video
+				const hls = item.data?.media?.reddit_video?.hls_url as string | undefined;
+				if (hls) {
+					videoUrl = hls;
+				} else if (videoUrl && videoUrl.includes('DASH_') && videoUrl.endsWith('.mp4')) {
+					// derive audio from DASH_XXX.mp4 -> DASH_audio.mp4
+					audioUrl = videoUrl.replace(/DASH_[^/.]+\.mp4$/, 'DASH_audio.mp4');
+				}
 
 				// Skip immediately if post already fully processed previously
 				const retriesLeft = Number((await env.PROCESSED_POSTS_KV.get(key)) ?? 5);
@@ -85,8 +136,10 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 `;
 
 					let message = `${title} <a href="${videoUrl}">↗</a>`;
-					if ((videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) && !videoUrl.includes('DASH_96.')) {
-						message += ` <a href="https://demo.meshkov.info/video?url=${encodeURIComponent(videoUrl)}">▷</a>`;
+					if (videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) {
+						const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
+						const absPlayerUrl = new URL(playerUrl, 'https://golissimo.workers.dev').toString();
+						message += ` <a href="${absPlayerUrl}">▷</a>`;
 					}
 
 					const geminiResponse = await fetch(
@@ -232,6 +285,10 @@ const extractBestMediaUrl = (d: any): string | null => {
 };
 
 const decodeRedditUrl = (u: string): string => u.replace(/&amp;/g, '&');
+
+const escapeHtml = (input: string): string => {
+	return String(input).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+};
 
 const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | null> => {
 	const browser = await puppeteer.launch(env.BROWSER);

@@ -26,8 +26,19 @@ export default {
 				const title = item.data.title;
 				let videoUrl = item.data.media?.reddit_video?.fallback_url || item.data.url;
 
+				// Skip immediately if post already fully processed previously
 				const retriesLeft = Number((await env.PROCESSED_POSTS_KV.get(key)) ?? 5);
 				if (retriesLeft <= 0) continue;
+
+				// Early media-level dedupe before any heavy work
+				if (videoUrl) {
+					const rawMediaKey = `media:${canonicalizeUrl(videoUrl)}`;
+					if (processedThisRun.has(rawMediaKey) || (await env.PROCESSED_POSTS_KV.get(rawMediaKey))) {
+						await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
+						continue;
+					}
+					processedThisRun.add(rawMediaKey);
+				}
 
 				console.log(`Key: ${key}, Title: ${title}. Processing.`);
 

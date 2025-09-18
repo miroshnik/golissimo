@@ -165,7 +165,6 @@ export default {
 				if (videoUrl) {
 					rawMediaKey = `media:${canonicalizeUrl(videoUrl)}`;
 					if (processedThisRun.has(rawMediaKey) || (await env.PROCESSED_POSTS_KV.get(rawMediaKey))) {
-						await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
 						log('skip:kv-media', { key, mediaKey: rawMediaKey });
 						continue;
 					}
@@ -200,8 +199,6 @@ export default {
 					// Only re-check dedupe if final mediaKey differs from early reserved rawMediaKey
 					if (!rawMediaKey || mediaKey !== rawMediaKey) {
 						if (processedThisRun.has(mediaKey) || (await env.PROCESSED_POSTS_KV.get(mediaKey))) {
-							// Mark post as processed to avoid future retries for the same duplicate
-							await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
 							log('skip:kv-media-final', { key, mediaKey });
 							continue;
 						}

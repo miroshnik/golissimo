@@ -135,11 +135,12 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 Теперь ответь для моей строки:
 `;
 
-					let message = `${title} <a href="${videoUrl}">↗</a>`;
+					const safeTitle = escapeHtml(title);
+					let message = `${safeTitle} <a href="${escapeHtml(videoUrl)}">↗</a>`;
 					if (videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) {
 						const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
 						const absPlayerUrl = new URL(playerUrl, 'https://golissimo.workers.dev').toString();
-						message += ` <a href="${absPlayerUrl}">▷</a>`;
+						message += ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
 					}
 
 					const geminiResponse = await fetch(
@@ -167,20 +168,23 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 					const aiText = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
 					message += `\n${aiText}`;
 
-					const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+					const isImage = isDirectImageUrl(videoUrl);
+					const tgMethod = isImage ? 'sendPhoto' : 'sendMessage';
+					const tgPayload = isImage
+						? { chat_id: env.TELEGRAM_CHAT_ID, photo: videoUrl, caption: message, parse_mode: 'HTML' }
+						: { chat_id: env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' };
+					const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${tgMethod}`, {
 						method: 'POST',
-						headers: {
-							'Content-Type': 'application/json',
-						},
-						body: JSON.stringify({
-							chat_id: env.TELEGRAM_CHAT_ID,
-							text: message,
-							parse_mode: 'HTML',
-						}),
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify(tgPayload),
 					});
 
 					if (!response.ok) {
-						console.error(`Failed to send Telegram message: ${response.status}`);
+						let bodyText = '';
+						try {
+							bodyText = await response.text();
+						} catch {}
+						console.error(`Failed to send Telegram message: ${response.status} ${response.statusText} - ${bodyText}`);
 						continue;
 					}
 

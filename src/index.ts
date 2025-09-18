@@ -25,6 +25,25 @@ export default {
 			const deleted = await clearKvPrefix(env, prefix);
 			return Response.json({ deleted, prefix });
 		}
+		if (url.pathname === '/proxy') {
+			const src = url.searchParams.get('url') || '';
+			try {
+				const u = new URL(src);
+				if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+					return new Response('Bad Request', { status: 400 });
+				}
+				const resp = await fetch(u.toString(), {
+					headers: { 'User-Agent': 'Mozilla/5.0' },
+					cf: { cacheTtl: 300, cacheEverything: true },
+				});
+				const headers = new Headers(resp.headers);
+				headers.set('Cache-Control', 'public, max-age=300');
+				headers.delete('Set-Cookie');
+				return new Response(resp.body, { status: resp.status, headers });
+			} catch {
+				return new Response('Bad Request', { status: 400 });
+			}
+		}
 		if (url.pathname === '/player') {
 			const video = url.searchParams.get('video') || '';
 			const audio = url.searchParams.get('audio') || '';
@@ -184,8 +203,11 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 
 					const isImage = isDirectImageUrl(videoUrl);
 					const tgMethod = isImage ? 'sendPhoto' : 'sendMessage';
+					const photoUrl = isImage
+						? new URL(`/proxy?url=${encodeURIComponent(videoUrl)}`, 'https://golissimo.miroshnik.workers.dev').toString()
+						: undefined;
 					const tgPayload = isImage
-						? { chat_id: env.TELEGRAM_CHAT_ID, photo: videoUrl, caption: message, parse_mode: 'HTML' }
+						? { chat_id: env.TELEGRAM_CHAT_ID, photo: photoUrl, caption: message, parse_mode: 'HTML' }
 						: { chat_id: env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' };
 					const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${tgMethod}`, {
 						method: 'POST',

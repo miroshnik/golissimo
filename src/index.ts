@@ -9,14 +9,14 @@ interface Env {
 }
 
 export default {
-	async fetch (request, env, ctx): Promise<Response> {
+	async fetch(request, env, ctx): Promise<Response> {
 		return Response.json(await env.PROCESSED_POSTS_KV.list());
 	},
 
-	async scheduled (event, env) {
+	async scheduled(event, env) {
 		try {
 			const response = await fetch('https://www.reddit.com/r/soccer/new.json?limit=25', {
-				headers: { 'User-Agent': 'Mozilla/5.0' }
+				headers: { 'User-Agent': 'golissimo bot 1.0' },
 			});
 
 			if (!response.ok) {
@@ -31,15 +31,21 @@ export default {
 				const title = item.data.title;
 				let videoUrl = item.data.media?.reddit_video?.fallback_url || item.data.url;
 
-				const retriesLeft = Number(await env.PROCESSED_POSTS_KV.get(id) ?? 5);
+				const retriesLeft = Number((await env.PROCESSED_POSTS_KV.get(id)) ?? 5);
 				if (retriesLeft <= 0) continue;
 
 				console.log(`ID: ${id}, Title: ${title}. Processing.`);
 
-				if (videoUrl && !(
-					videoUrl.includes('youtube') || videoUrl.includes('youtu.be') || videoUrl.includes('.jpeg') || videoUrl.includes('.png')
-					|| ((videoUrl.includes('.m3u8') || videoUrl.includes('.mp4')) && !videoUrl.includes('DASH_96.'))
-				)) {
+				if (
+					videoUrl &&
+					!(
+						videoUrl.includes('youtube') ||
+						videoUrl.includes('youtu.be') ||
+						videoUrl.includes('.jpeg') ||
+						videoUrl.includes('.png') ||
+						((videoUrl.includes('.m3u8') || videoUrl.includes('.mp4')) && !videoUrl.includes('DASH_96.'))
+					)
+				) {
 					console.log(`Open ${videoUrl} in browser...`);
 					videoUrl = await getFinalStreamUrl(env, videoUrl);
 				}
@@ -69,22 +75,25 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 						message += ` <a href="https://demo.meshkov.info/video?url=${encodeURIComponent(videoUrl)}">▷</a>`;
 					}
 
-					const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`, {
-						method: 'POST',
-						headers: {
-							'Content-Type': 'application/json'
-						},
-						body: JSON.stringify({
-							contents: [
-								{
-									role: 'user',
-									parts: [{ text: prompt + title }]
-								}
-							]
-						})
-					});
+					const geminiResponse = await fetch(
+						`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`,
+						{
+							method: 'POST',
+							headers: {
+								'Content-Type': 'application/json',
+							},
+							body: JSON.stringify({
+								contents: [
+									{
+										role: 'user',
+										parts: [{ text: prompt + title }],
+									},
+								],
+							}),
+						}
+					);
 
-					const geminiJson = await geminiResponse.json() as any;
+					const geminiJson = (await geminiResponse.json()) as any;
 
 					console.log(geminiJson);
 
@@ -94,13 +103,13 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 					const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 						method: 'POST',
 						headers: {
-							'Content-Type': 'application/json'
+							'Content-Type': 'application/json',
 						},
 						body: JSON.stringify({
 							chat_id: env.TELEGRAM_CHAT_ID,
 							text: message,
-							parse_mode: 'HTML'
-						})
+							parse_mode: 'HTML',
+						}),
 					});
 
 					if (!response.ok) {
@@ -116,14 +125,16 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 		} catch (error) {
 			console.error(error);
 		}
-	}
+	},
 } satisfies ExportedHandler<Env>;
 
 const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | null> => {
 	const browser = await puppeteer.launch(env.BROWSER);
 	const page = await browser.newPage();
 
-	await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36');
+	await page.setUserAgent(
+		'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36'
+	);
 
 	let finalStreamUrl: string | null = null;
 	try {
@@ -131,7 +142,7 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 		page.on('request', async (request) => {
 			const url = request.url();
-			if (!finalStreamUrl && ((url.includes('.m3u8') || url.includes('.mp4')) && !url.includes('DASH_96.'))) {
+			if (!finalStreamUrl && (url.includes('.m3u8') || url.includes('.mp4')) && !url.includes('DASH_96.')) {
 				console.log(`Video stream found: ${url}`);
 				finalStreamUrl = url;
 			} else {

@@ -15,16 +15,8 @@ export default {
 
 	async scheduled(event, env) {
 		try {
-			const response = await fetch('https://www.reddit.com/r/soccer/new.json?limit=25', {
-				headers: { 'User-Agent': 'golissimo bot 1.0' },
-			});
-
-			if (!response.ok) {
-				console.error(`Posts fetch error: ${response.status} ${response.statusText}`);
-				return;
-			}
-
-			const data: Record<any, any> = await response.json();
+			const data = await fetchRedditNew(env);
+			if (!data) return;
 
 			for (const item of data.data.children.filter((post: any) => post.data.link_flair_text === 'Media').reverse()) {
 				const id = item.data.id;
@@ -127,6 +119,20 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 		}
 	},
 } satisfies ExportedHandler<Env>;
+
+const fetchRedditNew = async (env: Env): Promise<any | null> => {
+	const url = 'https://api.reddit.com/r/soccer/new?limit=25';
+	const response = await fetch(url, { headers: { 'User-Agent': 'golissimo bot 1.0' } });
+	if (response.status === 429) {
+		console.error('Posts fetch error: 429 Too Many Requests');
+		return null;
+	}
+	if (!response.ok) {
+		console.error(`Posts fetch error: ${response.status} ${response.statusText}`);
+		return null;
+	}
+	return response.json();
+};
 
 const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | null> => {
 	const browser = await puppeteer.launch(env.BROWSER);

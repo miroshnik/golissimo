@@ -80,7 +80,7 @@ export default {
 			</head>
 			<body>
 				<div id="wrap">
-					<video id="v" playsinline autoplay muted preload="metadata" src="${escapeHtml(video)}"></video>
+					<video id="v" playsinline autoplay muted controls preload="metadata" src="${escapeHtml(video)}"></video>
 					<audio id="a" preload="metadata" src="${escapeHtml(audio)}" ${audio ? '' : 'style="display:none"'}></audio>
 				</div>
 				<script>
@@ -102,11 +102,6 @@ export default {
 						v.addEventListener('ratechange', ()=>{ a.playbackRate = v.playbackRate; });
 						a.addEventListener('seeking', ()=> sync(a,v));
 					}
-					// Tap anywhere to toggle sound
-					document.addEventListener('click', ()=>{
-						v.muted = !v.muted;
-						if (a && a.src) { a.muted = v.muted; if (!a.paused) a.play().catch(()=>{}); }
-					});
 				})();
 				</script>
 			</body>
@@ -252,7 +247,20 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 						const aiObj = aiResp as { response?: string };
 						aiText = aiObj.response ?? '';
 						if (aiText) log('ai:ok', { key });
-						if (aiText) message += `\n${aiText}`;
+						if (aiText) {
+							// Normalize hashtags: remove dots, collapse spaces, allow only letters/digits in tag body
+							aiText = aiText
+								.replace(/\./g, '')
+								.split(/\s+/)
+								.filter(Boolean)
+								.map((tok) => {
+									if (!tok.startsWith('#')) tok = '#' + tok;
+									// keep # then strip non-alnum from the rest
+									return '#' + tok.slice(1).replace(/[^\p{L}\p{N}]/gu, '');
+								})
+								.join(' ');
+							message += `\n${aiText}`;
+						}
 
 						const isImage = isDirectImageUrl(videoUrl);
 						const tgMethod = isImage ? 'sendPhoto' : 'sendMessage';

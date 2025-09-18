@@ -19,14 +19,14 @@ export default {
 			if (!data) return;
 
 			for (const item of data.data.children.filter((post: any) => post.data.link_flair_text === 'Media').reverse()) {
-				const id = item.data.id;
+				const key = derivePostKey(item);
 				const title = item.data.title;
 				let videoUrl = item.data.media?.reddit_video?.fallback_url || item.data.url;
 
-				const retriesLeft = Number((await env.PROCESSED_POSTS_KV.get(id)) ?? 5);
+				const retriesLeft = Number((await env.PROCESSED_POSTS_KV.get(key)) ?? 5);
 				if (retriesLeft <= 0) continue;
 
-				console.log(`ID: ${id}, Title: ${title}. Processing.`);
+				console.log(`Key: ${key}, Title: ${title}. Processing.`);
 
 				if (
 					videoUrl &&
@@ -42,7 +42,7 @@ export default {
 					videoUrl = await getFinalStreamUrl(env, videoUrl);
 				}
 
-				console.log(`Video URL: ${videoUrl}, ID: ${id}`);
+				console.log(`Video URL: ${videoUrl}, Key: ${key}`);
 
 				if (videoUrl) {
 					const prompt = `
@@ -109,9 +109,9 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 						continue;
 					}
 
-					await env.PROCESSED_POSTS_KV.put(id, '0', { expirationTtl: 86400 });
+					await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
 				} else {
-					await env.PROCESSED_POSTS_KV.put(id, (retriesLeft - 1).toString(), { expirationTtl: 86400 });
+					await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
 				}
 			}
 		} catch (error) {
@@ -119,6 +119,29 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 		}
 	},
 } satisfies ExportedHandler<Env>;
+
+const derivePostKey = (item: any): string => {
+	const d = item?.data ?? {};
+	// Prefer stable unique fields from Reddit listing
+	const candidates: string[] = [
+		d.name, // e.g., t3_abcdef
+		d.id, // short id
+		d.permalink,
+		d.url,
+		`${d.title || ''}::${d.created_utc || ''}`,
+	].filter(Boolean);
+	const raw = candidates[0] as string;
+	// Normalize URLs and whitespace
+	try {
+		if (raw.startsWith('http')) {
+			const u = new URL(raw);
+			u.search = '';
+			u.hash = '';
+			return `post:${u.toString()}`;
+		}
+	} catch {}
+	return `post:${raw}`;
+};
 
 const fetchRedditNew = async (env: Env): Promise<any | null> => {
 	const url = 'https://api.reddit.com/r/soccer/new?limit=25';

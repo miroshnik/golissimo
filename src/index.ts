@@ -136,15 +136,16 @@ export default {
 				const title = item.data.title;
 				let videoUrl = extractBestMediaUrl(item.data);
 				let audioUrl: string | null = null;
+				let mediaKind = 'direct';
 				// Try prefer hls_url (muxed av) if available under media.reddit_video
 				const hls = item.data?.media?.reddit_video?.hls_url as string | undefined;
 				if (hls) {
 					videoUrl = hls;
-					log('media:hls', { key, url: shortUrl(videoUrl) });
+					mediaKind = 'hls';
 				} else if (videoUrl && videoUrl.includes('DASH_') && videoUrl.endsWith('.mp4')) {
 					// derive audio from DASH_XXX.mp4 -> DASH_audio.mp4
 					audioUrl = videoUrl.replace(/DASH_[^/.]+\.mp4$/, 'DASH_audio.mp4');
-					log('media:dash', { key, video: shortUrl(videoUrl), audio: shortUrl(audioUrl) });
+					mediaKind = 'dash';
 				}
 
 				// Skip immediately if post already processed or being processed by another run
@@ -166,6 +167,7 @@ export default {
 					rawMediaKey = `media:${canonicalizeUrl(videoUrl)}`;
 					if (processedThisRun.has(rawMediaKey) || (await env.PROCESSED_POSTS_KV.get(rawMediaKey))) {
 						log('skip:kv-media', { key, mediaKey: rawMediaKey });
+						await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
 						continue;
 					}
 					processedThisRun.add(rawMediaKey);
@@ -173,6 +175,8 @@ export default {
 					await env.PROCESSED_POSTS_KV.put(key, 'pending', { expirationTtl: 604800 });
 					await env.PROCESSED_POSTS_KV.put(rawMediaKey, 'pending', { expirationTtl: 604800 });
 					log('reserve:pending', { key, mediaKey: rawMediaKey });
+					// Log media kind only for non-skipped items
+					log('media:kind', { key, kind: mediaKind, url: shortUrl(videoUrl), audio: shortUrl(audioUrl) });
 				}
 
 				log('process:start', { key, title });
@@ -200,6 +204,7 @@ export default {
 					if (!rawMediaKey || mediaKey !== rawMediaKey) {
 						if (processedThisRun.has(mediaKey) || (await env.PROCESSED_POSTS_KV.get(mediaKey))) {
 							log('skip:kv-media-final', { key, mediaKey });
+							await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
 							continue;
 						}
 					}

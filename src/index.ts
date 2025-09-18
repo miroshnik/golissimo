@@ -209,16 +209,40 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 		page.on('request', async (request) => {
 			const url = request.url();
-			if (!finalStreamUrl && (url.includes('.m3u8') || url.includes('.mp4')) && !url.includes('DASH_96.')) {
-				console.log(`Video stream found: ${url}`);
+			if (!finalStreamUrl && isMediaUrl(url)) {
+				console.log(`Video stream found (request): ${url}`);
 				finalStreamUrl = url;
-			} else {
-				await request.continue();
+			}
+			await request.continue();
+		});
+
+		page.on('response', async (response) => {
+			const url = response.url();
+			if (!finalStreamUrl && isMediaUrl(url)) {
+				console.log(`Video stream found (response): ${url}`);
+				finalStreamUrl = url;
 			}
 		});
 
-		await page.goto(streamUrl, { waitUntil: 'domcontentloaded' });
-		await page.waitForSelector('video source', { timeout: 3000 });
+		try {
+			await page.goto(streamUrl, { waitUntil: 'networkidle2' });
+		} catch (_) {
+			await page.goto(streamUrl, { waitUntil: 'domcontentloaded' });
+		}
+
+		if (!finalStreamUrl) {
+			try {
+				const req = await page.waitForRequest((req) => isMediaUrl(req.url()), { timeout: 10000 });
+				finalStreamUrl = req.url();
+			} catch (_) {
+				// ignore
+			}
+		}
+
+		if (!finalStreamUrl) {
+			await new Promise((r) => setTimeout(r, 2000));
+		}
+
 		return finalStreamUrl;
 	} catch (error) {
 		console.error(`Stream processing fail for ${streamUrl}:`, error);
@@ -226,4 +250,8 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 	} finally {
 		await browser.close();
 	}
+};
+
+const isMediaUrl = (url: string): boolean => {
+	return (url.includes('.m3u8') || url.includes('.mp4')) && !url.includes('DASH_96.');
 };

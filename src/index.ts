@@ -84,13 +84,31 @@ export default {
 			</head>
 			<body>
 				<div id="wrap">
-					<video id="v" playsinline autoplay muted controls preload="metadata" src="${escapeHtml(video)}"></video>
+					<video id="v" playsinline autoplay muted controls preload="metadata" crossorigin="anonymous"></video>
 					<audio id="a" preload="metadata" src="${escapeHtml(audio)}" ${audio ? '' : 'style="display:none"'}></audio>
 				</div>
+				<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 				<script>
 				(function(){
 					const v = document.getElementById('v');
 					const a = document.getElementById('a');
+					const params = new URL(location.href).searchParams;
+					const src = params.get('video') || '';
+					// Setup source with HLS.js for Chrome
+					if (src.endsWith('.m3u8')) {
+						if (window.Hls && Hls.isSupported()) {
+							const hls = new Hls({ lowLatencyMode: true, backBufferLength: 60 });
+							hls.loadSource(src);
+							hls.attachMedia(v);
+							hls.on(Hls.Events.MANIFEST_PARSED, ()=>{ v.play().catch(()=>{}); });
+						} else if (v.canPlayType && v.canPlayType('application/vnd.apple.mpegurl')) {
+							v.src = src;
+						} else {
+							v.src = src;
+						}
+					} else {
+						v.src = src;
+					}
 					// Autoplay: keep both muted to satisfy browser policies
 					if (a && a.src) { a.muted = true; a.play().catch(()=>{}); }
 					v.play().catch(()=>{});

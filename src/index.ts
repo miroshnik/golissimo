@@ -98,13 +98,13 @@ export default {
 					!(
 						videoUrl.includes('youtube') ||
 						videoUrl.includes('youtu.be') ||
-						videoUrl.includes('.jpeg') ||
-						videoUrl.includes('.png') ||
+						isDirectImageUrl(videoUrl) ||
 						((videoUrl.includes('.m3u8') || videoUrl.includes('.mp4')) && !videoUrl.includes('DASH_96.'))
 					)
 				) {
 					console.log(`Open ${videoUrl} in browser...`);
-					videoUrl = await getFinalStreamUrl(env, videoUrl);
+					const resolved = await getFinalStreamUrl(env, videoUrl);
+					if (resolved) videoUrl = resolved;
 				}
 
 				console.log(`Video URL: ${videoUrl}, Key: ${key}`);
@@ -349,4 +349,15 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 const isMediaUrl = (url: string): boolean => {
 	return (url.includes('.m3u8') || url.includes('.mp4')) && !url.includes('DASH_96.');
+};
+
+const isDirectImageUrl = (url: string): boolean => {
+	try {
+		const u = new URL(url);
+		const lower = u.href.toLowerCase();
+		if (u.hostname.endsWith('preview.redd.it')) return true;
+		return /\.(jpe?g|png|webp|gif)(\?|$)/i.test(lower) || lower.includes('format=pjpg');
+	} catch {
+		return /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url.toLowerCase());
+	}
 };

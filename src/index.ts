@@ -153,7 +153,7 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 					let message = `${safeTitle} <a href="${escapeHtml(videoUrl)}">↗</a>`;
 					if (videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) {
 						const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
-						const absPlayerUrl = new URL(playerUrl, 'https://golissimo.workers.dev').toString();
+						const absPlayerUrl = new URL(playerUrl, 'https://golissimo.miroshnik.workers.dev').toString();
 						message += ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
 					}
 

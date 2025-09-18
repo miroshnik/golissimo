@@ -61,24 +61,33 @@ export default {
 			</head>
 			<body>
 				<div id="wrap">
-					<video id="v" playsinline controls preload="metadata" src="${escapeHtml(video)}"></video>
+					<video id="v" playsinline autoplay muted preload="metadata" src="${escapeHtml(video)}"></video>
 					<audio id="a" preload="metadata" src="${escapeHtml(audio)}" ${audio ? '' : 'style="display:none"'}></audio>
 				</div>
 				<script>
 				(function(){
 					const v = document.getElementById('v');
 					const a = document.getElementById('a');
-					if (!a.src) return;
+					// Autoplay: keep both muted to satisfy browser policies
+					if (a && a.src) { a.muted = true; a.play().catch(()=>{}); }
+					v.play().catch(()=>{});
 					let syncing = false;
 					function sync(from, to){
-						if (syncing) return; syncing = true; try { to.currentTime = from.currentTime; } catch(e){}
+						if (!to) return; if (syncing) return; syncing = true; try { to.currentTime = from.currentTime; } catch(e){}
 						setTimeout(()=>{ syncing = false; }, 0);
 					}
-					v.addEventListener('play', ()=>{ a.play().catch(()=>{}); sync(v,a); });
-					v.addEventListener('pause', ()=>{ a.pause(); });
-					v.addEventListener('seeking', ()=> sync(v,a));
-					v.addEventListener('ratechange', ()=>{ a.playbackRate = v.playbackRate; });
-					a.addEventListener('seeking', ()=> sync(a,v));
+					if (a && a.src) {
+						v.addEventListener('play', ()=>{ a.play().catch(()=>{}); sync(v,a); });
+						v.addEventListener('pause', ()=>{ a.pause(); });
+						v.addEventListener('seeking', ()=> sync(v,a));
+						v.addEventListener('ratechange', ()=>{ a.playbackRate = v.playbackRate; });
+						a.addEventListener('seeking', ()=> sync(a,v));
+					}
+					// Tap anywhere to toggle sound
+					document.addEventListener('click', ()=>{
+						v.muted = !v.muted;
+						if (a && a.src) { a.muted = v.muted; if (!a.paused) a.play().catch(()=>{}); }
+					});
 				})();
 				</script>
 			</body>
@@ -110,18 +119,27 @@ export default {
 					audioUrl = videoUrl.replace(/DASH_[^/.]+\.mp4$/, 'DASH_audio.mp4');
 				}
 
-				// Skip immediately if post already fully processed previously
-				const retriesLeft = Number((await env.PROCESSED_POSTS_KV.get(key)) ?? 5);
-				if (retriesLeft <= 0) continue;
+				// Skip immediately if post already processed or being processed by another run
+				const existingKeyVal = await env.PROCESSED_POSTS_KV.get(key);
+				let retriesLeft = 5;
+				if (existingKeyVal !== null) {
+					if (existingKeyVal === '0' || existingKeyVal === 'pending') continue;
+					retriesLeft = Number(existingKeyVal);
+					if (!Number.isFinite(retriesLeft)) retriesLeft = 0;
+				}
 
-				// Early media-level dedupe before any heavy work
+				// Early media-level dedupe and reservation before any heavy work
+				let rawMediaKey: string | null = null;
 				if (videoUrl) {
-					const rawMediaKey = `media:${canonicalizeUrl(videoUrl)}`;
+					rawMediaKey = `media:${canonicalizeUrl(videoUrl)}`;
 					if (processedThisRun.has(rawMediaKey) || (await env.PROCESSED_POSTS_KV.get(rawMediaKey))) {
 						await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
 						continue;
 					}
 					processedThisRun.add(rawMediaKey);
+					// Reserve both keys as pending to avoid race duplicates
+					await env.PROCESSED_POSTS_KV.put(key, 'pending', { expirationTtl: 604800 });
+					await env.PROCESSED_POSTS_KV.put(rawMediaKey, 'pending', { expirationTtl: 604800 });
 				}
 
 				console.log(`Key: ${key}, Title: ${title}. Processing.`);
@@ -151,6 +169,11 @@ export default {
 					}
 
 					processedThisRun.add(mediaKey);
+					// If we reserved a raw key and final mediaKey differs, move reservation
+					if (rawMediaKey && rawMediaKey !== mediaKey) {
+						await env.PROCESSED_POSTS_KV.delete(rawMediaKey);
+						await env.PROCESSED_POSTS_KV.put(mediaKey, 'pending', { expirationTtl: 604800 });
+					}
 					const prompt = `
 					Извлеки хештеги из строки
 Только хештеги, через пробел. Никаких комментариев и кода.
@@ -221,6 +244,9 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 							bodyText = await response.text();
 						} catch {}
 						console.error(`Failed to send Telegram message: ${response.status} ${response.statusText} - ${bodyText}`);
+						// Release reservations on failure to allow retry later
+						await env.PROCESSED_POSTS_KV.delete(mediaKey);
+						await env.PROCESSED_POSTS_KV.delete(key);
 						continue;
 					}
 
@@ -235,6 +261,8 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 		}
 	},
 } satisfies ExportedHandler<Env>;
+
+// No durable object lock
 
 const derivePostKey = (item: any): string => {
 	const d = item?.data ?? {};

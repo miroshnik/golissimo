@@ -158,8 +158,11 @@ export default {
 				// Try prefer hls_url (muxed av) if available under media.reddit_video
 				const hls = item.data?.media?.reddit_video?.hls_url as string | undefined;
 				if (hls) {
-					videoUrl = hls;
-					mediaKind = 'hls';
+					// Prefer mp4 for Telegram preview; use HLS only if no mp4 was found
+					if (!(videoUrl && videoUrl.endsWith('.mp4'))) {
+						videoUrl = hls;
+						mediaKind = 'hls';
+					}
 				} else if (videoUrl && videoUrl.includes('DASH_') && videoUrl.endsWith('.mp4')) {
 					// derive audio from DASH_XXX.mp4 -> DASH_audio.mp4
 					audioUrl = videoUrl.replace(/DASH_[^/.]+\.mp4$/, 'DASH_audio.mp4');
@@ -201,12 +204,8 @@ export default {
 
 				if (
 					videoUrl &&
-					!(
-						videoUrl.includes('youtube') ||
-						videoUrl.includes('youtu.be') ||
-						isDirectImageUrl(videoUrl) ||
-						((videoUrl.includes('.m3u8') || videoUrl.includes('.mp4')) && !videoUrl.includes('DASH_96.'))
-					)
+					!(videoUrl.includes('youtube') || videoUrl.includes('youtu.be') || isDirectImageUrl(videoUrl)) &&
+					!videoUrl.includes('.mp4')
 				) {
 					log('resolve:open', { key, url: shortUrl(videoUrl) });
 					const resolved = await getFinalStreamUrl(env, videoUrl);
@@ -292,19 +291,37 @@ export default {
 						}
 
 						const isImage = isDirectImageUrl(videoUrl);
-						const tgMethod = isImage ? 'sendPhoto' : 'sendMessage';
-						const photoUrl = isImage
-							? new URL(`/proxy?url=${encodeURIComponent(videoUrl)}`, 'https://golissimo.miroshnik.workers.dev').toString()
-							: undefined;
-						const tgPayload = isImage
-							? { chat_id: env.TELEGRAM_CHAT_ID, photo: photoUrl, caption: message, parse_mode: 'HTML' }
-							: { chat_id: env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' };
-						log('tg:send', { key, method: tgMethod, photo: photoUrl ? shortUrl(photoUrl) : undefined });
-						const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${tgMethod}`, {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify(tgPayload),
-						});
+						const isMp4 = videoUrl.endsWith('.mp4');
+						let response: Response;
+						if (isImage) {
+							const photoUrl = new URL(`/proxy?url=${encodeURIComponent(videoUrl)}`, 'https://golissimo.miroshnik.workers.dev').toString();
+							log('tg:send', { key, method: 'sendPhoto', photo: shortUrl(photoUrl) });
+							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/json' },
+								body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, photo: photoUrl, caption: message, parse_mode: 'HTML' }),
+							});
+						} else if (isMp4) {
+							log('tg:send', { key, method: 'sendVideo', video: shortUrl(videoUrl) });
+							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendVideo`, {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/json' },
+								body: JSON.stringify({
+									chat_id: env.TELEGRAM_CHAT_ID,
+									video: videoUrl,
+									caption: message,
+									parse_mode: 'HTML',
+									supports_streaming: true,
+								}),
+							});
+						} else {
+							log('tg:send', { key, method: 'sendMessage' });
+							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/json' },
+								body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' }),
+							});
+						}
 
 						if (!response.ok) {
 							let bodyText = '';

@@ -252,7 +252,7 @@ Annecy 1-0 Caen - Yohann Demoncy 13'
 `;
 
 					try {
-						const safeTitle = escapeHtml(title);
+						const safeTitle = escapeHtml(decodeHtmlEntities(title));
 						let message = `${safeTitle} <a href="${escapeHtml(videoUrl)}">↗</a>`;
 						if (videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) {
 							const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
@@ -444,6 +444,15 @@ const decodeRedditUrl = (u: string): string => u.replace(/&amp;/g, '&');
 
 const escapeHtml = (input: string): string => {
 	return String(input).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+};
+
+const decodeHtmlEntities = (s: string): string => {
+	return s
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'");
 };
 
 const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | null> => {

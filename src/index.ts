@@ -155,6 +155,12 @@ export default {
 				let videoUrl = extractBestMediaUrl(item.data);
 				let audioUrl: string | null = null;
 				let mediaKind = 'direct';
+				// Strongly prefer Reddit fallback MP4 for Telegram preview
+				const fallbackMp4 = item.data?.media?.reddit_video?.fallback_url as string | undefined;
+				if (fallbackMp4 && fallbackMp4.endsWith('.mp4')) {
+					videoUrl = fallbackMp4;
+					mediaKind = 'mp4_fallback';
+				}
 				// Try prefer hls_url (muxed av) if available under media.reddit_video
 				const hls = item.data?.media?.reddit_video?.hls_url as string | undefined;
 				if (hls) {

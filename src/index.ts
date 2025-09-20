@@ -296,24 +296,9 @@ export default {
 							message += `\n${aiText}`;
 						}
 
-						const isImage = isDirectImageUrl(videoUrl);
 						const isMp4 = videoUrl.endsWith('.mp4');
-						// Try to get preview image when we don't have MP4
-						let previewImageUrl: string | null = null;
-						if (!isMp4) {
-							previewImageUrl = extractBestPreviewImage(item.data) || (await fetchOgImageSafe(videoUrl));
-						}
 						let response: Response;
-						if (isImage || previewImageUrl) {
-							const photoSrc = isImage ? videoUrl : previewImageUrl!;
-							const photoUrl = new URL(`/proxy?url=${encodeURIComponent(photoSrc)}`, 'https://golissimo.miroshnik.workers.dev').toString();
-							log('tg:send', { key, method: 'sendPhoto', photo: shortUrl(photoUrl) });
-							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
-								method: 'POST',
-								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, photo: photoUrl, caption: message, parse_mode: 'HTML' }),
-							});
-						} else if (isMp4) {
+						if (isMp4) {
 							log('tg:send', { key, method: 'sendVideo', video: shortUrl(videoUrl) });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendVideo`, {
 								method: 'POST',
@@ -327,14 +312,20 @@ export default {
 								}),
 							});
 						} else {
-							// sendMessage with Reddit permalink first to trigger web preview
-							const permalink = item.data?.permalink ? `https://www.reddit.com${item.data.permalink}` : '';
-							const textWithPreview = permalink ? `${permalink}\n${message}` : message;
-							log('tg:send', { key, method: 'sendMessage' });
+							// No mp4 extracted
+							if (retriesLeft > 1) {
+								log('skip:no-mp4', { key, retriesLeft });
+								await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
+								await env.PROCESSED_POSTS_KV.delete(mediaKey);
+								continue;
+							}
+							// Last attempt: post m3u8 link in text so TG can preview based on raw link
+							const textWithLink = `${message} <a href="${escapeHtml(videoUrl)}">↗</a>`;
+							log('tg:send', { key, method: 'sendMessage-last' });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 								method: 'POST',
 								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: textWithPreview, parse_mode: 'HTML' }),
+								body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: textWithLink, parse_mode: 'HTML' }),
 							});
 						}
 

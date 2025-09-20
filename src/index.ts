@@ -298,9 +298,15 @@ export default {
 
 						const isImage = isDirectImageUrl(videoUrl);
 						const isMp4 = videoUrl.endsWith('.mp4');
+						// Try to get preview image when we don't have MP4
+						let previewImageUrl: string | null = null;
+						if (!isMp4) {
+							previewImageUrl = extractBestPreviewImage(item.data) || (await fetchOgImageSafe(videoUrl));
+						}
 						let response: Response;
-						if (isImage) {
-							const photoUrl = new URL(`/proxy?url=${encodeURIComponent(videoUrl)}`, 'https://golissimo.miroshnik.workers.dev').toString();
+						if (isImage || previewImageUrl) {
+							const photoSrc = isImage ? videoUrl : previewImageUrl!;
+							const photoUrl = new URL(`/proxy?url=${encodeURIComponent(photoSrc)}`, 'https://golissimo.miroshnik.workers.dev').toString();
 							log('tg:send', { key, method: 'sendPhoto', photo: shortUrl(photoUrl) });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
 								method: 'POST',
@@ -321,11 +327,14 @@ export default {
 								}),
 							});
 						} else {
+							// sendMessage with Reddit permalink first to trigger web preview
+							const permalink = item.data?.permalink ? `https://www.reddit.com${item.data.permalink}` : '';
+							const textWithPreview = permalink ? `${permalink}\n${message}` : message;
 							log('tg:send', { key, method: 'sendMessage' });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 								method: 'POST',
 								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' }),
+								body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: textWithPreview, parse_mode: 'HTML' }),
 							});
 						}
 
@@ -497,7 +506,7 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 		page.on('request', async (request) => {
 			const url = request.url();
-			if (!finalStreamUrl && isMediaUrl(url)) {
+			if (!finalStreamUrl && isMp4Url(url)) {
 				console.log(`Video stream found (request): ${url}`);
 				finalStreamUrl = url;
 			}
@@ -506,7 +515,7 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 		page.on('response', async (response) => {
 			const url = response.url();
-			if (!finalStreamUrl && isMediaUrl(url)) {
+			if (!finalStreamUrl && isMp4Url(url)) {
 				console.log(`Video stream found (response): ${url}`);
 				finalStreamUrl = url;
 			}
@@ -520,11 +529,49 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 		if (!finalStreamUrl) {
 			try {
-				const req = await page.waitForRequest((req) => isMediaUrl(req.url()), { timeout: 10000 });
+				const req = await page.waitForRequest((req) => isMp4Url(req.url()), { timeout: 12000 });
 				finalStreamUrl = req.url();
 			} catch (_) {
 				// ignore
 			}
+		}
+
+		// Try DOM scraping for <video>/<source> src attributes
+		if (!finalStreamUrl) {
+			try {
+				const domUrls: string[] = await page.evaluate(() => {
+					const urls = new Set<string>();
+					const list: any[] = Array.from((globalThis as any).document?.querySelectorAll?.('video,source') || []);
+					for (const el of list) {
+						const src: string = el?.src || el?.getAttribute?.('src') || '';
+						if (src) urls.add(src);
+					}
+					return Array.from(urls);
+				});
+				for (const u of domUrls) {
+					if (isMp4Url(u)) {
+						finalStreamUrl = u;
+						break;
+					}
+				}
+			} catch (_) {}
+		}
+
+		// As a last resort, scan performance entries
+		if (!finalStreamUrl) {
+			try {
+				const perfUrls: string[] = await page.evaluate(() => {
+					const perf = (globalThis as any).performance;
+					const entries = perf && perf.getEntriesByType ? perf.getEntriesByType('resource') : [];
+					return (entries as any[]).map((e) => String(e.name || ''));
+				});
+				for (const u of perfUrls) {
+					if (isMp4Url(u)) {
+						finalStreamUrl = u;
+						break;
+					}
+				}
+			} catch (_) {}
 		}
 
 		if (!finalStreamUrl) {
@@ -541,8 +588,8 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 	}
 };
 
-const isMediaUrl = (url: string): boolean => {
-	return (url.includes('.m3u8') || url.includes('.mp4')) && !url.includes('DASH_96.');
+const isMp4Url = (url: string): boolean => {
+	return url.includes('.mp4') && !url.includes('DASH_96.');
 };
 
 const isDirectImageUrl = (url: string): boolean => {
@@ -553,5 +600,43 @@ const isDirectImageUrl = (url: string): boolean => {
 		return /\.(jpe?g|png|webp|gif)(\?|$)/i.test(lower) || lower.includes('format=pjpg');
 	} catch {
 		return /\.(jpe?g|png|webp|gif)(\?|$)/i.test(url.toLowerCase());
+	}
+};
+
+const extractBestPreviewImage = (d: any): string | null => {
+	// 1) media_metadata (gallery)
+	if (d?.is_gallery && d?.gallery_data?.items && d?.media_metadata) {
+		for (const it of d.gallery_data.items as any[]) {
+			const meta = d.media_metadata?.[it.media_id];
+			if (!meta) continue;
+			const src = meta.s?.u || (Array.isArray(meta.p) && meta.p.length ? meta.p[meta.p.length - 1]?.u : null);
+			if (src) return decodeRedditUrl(String(src));
+		}
+	}
+	// 2) preview.images[0]
+	const pimg = d?.preview?.images?.[0];
+	if (pimg) {
+		const src =
+			pimg.source?.url ||
+			(Array.isArray(pimg.resolutions) && pimg.resolutions.length ? pimg.resolutions[pimg.resolutions.length - 1]?.url : null);
+		if (src) return decodeRedditUrl(String(src));
+	}
+	// 3) direct overridden url if it's image
+	const overridden = d?.url_overridden_by_dest;
+	if (overridden && /\.(jpe?g|png|webp|gif)(\?|$)/i.test(overridden)) return overridden;
+	return null;
+};
+
+const fetchOgImageSafe = async (url: string): Promise<string | null> => {
+	try {
+		const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+		if (!resp.ok) return null;
+		const html = await resp.text();
+		const m =
+			html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+			html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+		return m ? m[1] : null;
+	} catch {
+		return null;
 	}
 };

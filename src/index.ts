@@ -244,7 +244,8 @@ export default {
 			Только хештеги, через пробел. Никаких комментариев и кода.
 
 			Правила генерации:
-			- Используй только названия команд и игроков (только буквы и цифры в теле тега).
+			- Используй только названия команд и игроков.
+			- ВАЖНО: в теле тега допускаются ТОЛЬКО английские буквы (A-Z, a-z) и цифры (0-9). Диакритики замени: ä→a, ö→o, å→a, é→e, ñ→n и т.п. Прочие символы удали.
 			- В конце добавь ОДИН тег события из списка: #Goal #Assist #Save #RedCard #YellowCard #Penalty #PenaltyMiss #OwnGoal #Injury #Transfer #Interview.
 			- Запрещено ставить #Goal, если в строке нет явных признаков гола (счёт вида "x - y", минуты "45'", глаголов score/scored/goal/GOL и т.п.). Для цитат/интервью/пресс-конференций выбирай #Interview.
 			- Подсказки: слова вроде "says", "quote", кавычки с речью игрока/тренера, метки IG/Instagram обычно означают интервью/цитату → #Interview.
@@ -257,6 +258,9 @@ export default {
 
 			Bernardo Silva: "We must improve before derby"
 			#BernardoSilva #Interview
+
+			Hammarby vs Häcken: Ultra Boys protest...
+			#Hammarby #Hacken #UltraBoys #Interview
 
 			Теперь ответь для моей строки:
 `;

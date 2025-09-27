@@ -323,8 +323,8 @@ export default {
 								await env.PROCESSED_POSTS_KV.delete(mediaKey);
 								continue;
 							}
-							// Last attempt: post m3u8 link in text so TG can preview based on raw link
-							const textWithLink = `${message} <a href="${escapeHtml(videoUrl)}">↗</a>`;
+							// Last attempt: header already contains ↗; keep tags line clean
+							const textWithLink = message;
 							log('tg:send', { key, method: 'sendMessage-last' });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 								method: 'POST',

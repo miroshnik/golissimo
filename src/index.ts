@@ -567,38 +567,64 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 	);
 
 	let finalStreamUrl: string | null = null;
+	let foundEarly = false;
+
 	try {
 		await page.setRequestInterception(true);
 
 		page.on('request', async (request) => {
-			const url = request.url();
-			if (!finalStreamUrl && isMp4Url(url)) {
-				console.log(`Video stream found (request): ${url}`);
-				finalStreamUrl = url;
+			try {
+				const url = request.url();
+				if (!finalStreamUrl && isMp4Url(url)) {
+					log('resolve:found-request', { url: shortUrl(url) });
+					finalStreamUrl = url;
+					foundEarly = true;
+				}
+				await request.continue().catch(() => {}); // Ignore if already handled
+			} catch (e) {
+				// Ignore errors in request handler
 			}
-			await request.continue();
 		});
 
 		page.on('response', async (response) => {
-			const url = response.url();
-			if (!finalStreamUrl && isMp4Url(url)) {
-				console.log(`Video stream found (response): ${url}`);
-				finalStreamUrl = url;
+			try {
+				const url = response.url();
+				if (!finalStreamUrl && isMp4Url(url)) {
+					log('resolve:found-response', { url: shortUrl(url) });
+					finalStreamUrl = url;
+					foundEarly = true;
+				}
+			} catch (e) {
+				// Ignore errors in response handler
 			}
 		});
 
 		try {
-			await page.goto(streamUrl, { waitUntil: 'networkidle2' });
-		} catch (_) {
-			await page.goto(streamUrl, { waitUntil: 'domcontentloaded' });
+			// Use shorter timeout and domcontentloaded for faster results
+			await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+
+			// If we found video URL during page load, return immediately
+			if (foundEarly && finalStreamUrl) {
+				log('resolve:early-return', { url: shortUrl(finalStreamUrl) });
+				return finalStreamUrl;
+			}
+		} catch (e) {
+			// If page load fails but we found URL, still return it
+			if (finalStreamUrl) {
+				log('resolve:error-but-found', { url: shortUrl(finalStreamUrl) });
+				return finalStreamUrl;
+			}
+			log('resolve:goto-error', { error: String(e).slice(0, 100) });
 		}
 
+		// Only continue searching if not found yet
 		if (!finalStreamUrl) {
 			try {
-				const req = await page.waitForRequest((req) => isMp4Url(req.url()), { timeout: 12000 });
+				const req = await page.waitForRequest((req) => isMp4Url(req.url()), { timeout: 8000 });
 				finalStreamUrl = req.url();
+				log('resolve:found-wait', { url: shortUrl(finalStreamUrl) });
 			} catch (_) {
-				// ignore
+				// ignore timeout
 			}
 		}
 
@@ -617,10 +643,13 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 				for (const u of domUrls) {
 					if (isMp4Url(u)) {
 						finalStreamUrl = u;
+						log('resolve:found-dom', { url: shortUrl(finalStreamUrl) });
 						break;
 					}
 				}
-			} catch (_) {}
+			} catch (e) {
+				log('resolve:dom-error', { error: String(e).slice(0, 50) });
+			}
 		}
 
 		// As a last resort, scan performance entries
@@ -634,23 +663,28 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 				for (const u of perfUrls) {
 					if (isMp4Url(u)) {
 						finalStreamUrl = u;
+						log('resolve:found-perf', { url: shortUrl(finalStreamUrl) });
 						break;
 					}
 				}
-			} catch (_) {}
+			} catch (e) {
+				log('resolve:perf-error', { error: String(e).slice(0, 50) });
+			}
 		}
 
-		if (!finalStreamUrl) {
-			await new Promise((r) => setTimeout(r, 2000));
-		}
-
-		log('resolve:return', { url: shortUrl(finalStreamUrl) });
+		log('resolve:return', { url: shortUrl(finalStreamUrl), found: !!finalStreamUrl });
 		return finalStreamUrl;
 	} catch (error) {
-		console.error('resolve:error', { src: shortUrl(streamUrl), error: String(error) });
+		log('resolve:error', { src: shortUrl(streamUrl), error: String(error).slice(0, 100), hadUrl: !!finalStreamUrl });
+		// Return whatever we found even if error occurred
 		return finalStreamUrl;
 	} finally {
-		await browser.close();
+		// Always close browser to free resources
+		try {
+			await browser.close();
+		} catch (e) {
+			log('resolve:close-error', { error: String(e).slice(0, 50) });
+		}
 	}
 };
 

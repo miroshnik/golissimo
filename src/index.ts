@@ -350,10 +350,10 @@ export default {
 								.join(' ');
 						}
 
-						// Build message: title (with optional source link) + hashtags on new line
+						// Build message: title (with source link) + hashtags on new line
 						let titleLine = safeTitle;
-						// Add source link only for non-video content
-						if (!videoUrl.endsWith('.mp4')) {
+						// Always add source link for video content
+						if (videoUrl) {
 							titleLine += ` <a href="${escapeHtml(videoUrl)}">↗</a>`;
 						}
 

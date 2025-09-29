@@ -293,14 +293,8 @@ export default {
 
 					try {
 						const safeTitle = escapeHtml(decodeHtmlEntities(title));
-						// For inline Telegram playback, don't add external player links
-						// Only add source link as fallback
-						let message = safeTitle;
-						// Add source link only for non-video content or as backup
-						if (!videoUrl.endsWith('.mp4')) {
-							message += ` <a href="${escapeHtml(videoUrl)}">↗</a>`;
-						}
 
+						// Generate hashtags first
 						let aiText = '';
 						log('ai:start', { key });
 						const aiResp = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
@@ -324,6 +318,17 @@ export default {
 									return '#' + tok.slice(1).replace(/[^\p{L}\p{N}]/gu, '');
 								})
 								.join(' ');
+						}
+
+						// Build message: title (with optional source link) + hashtags on new line
+						let titleLine = safeTitle;
+						// Add source link only for non-video content
+						if (!videoUrl.endsWith('.mp4')) {
+							titleLine += ` <a href="${escapeHtml(videoUrl)}">↗</a>`;
+						}
+
+						let message = titleLine;
+						if (aiText) {
 							message += `\n${aiText}`;
 						}
 
@@ -332,7 +337,17 @@ export default {
 						let response: Response;
 
 						// Validate that URL actually points to a video file
-						const isValidVideo = isMp4 ? await validateVideoUrl(videoUrl) : false;
+						let isValidVideo = false;
+						if (isMp4) {
+							// Quick check: if URL is from known Reddit video domains, skip validation
+							const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
+							if (isRedditVideo) {
+								log('validate:reddit-trusted', { url: shortUrl(videoUrl) });
+								isValidVideo = true;
+							} else {
+								isValidVideo = await validateVideoUrl(videoUrl);
+							}
+						}
 
 						if (!isValidVideo && isMp4) {
 							// URL looks like MP4 but isn't actually a video (HTML page, redirect, etc.)
@@ -342,6 +357,8 @@ export default {
 								await env.PROCESSED_POSTS_KV.delete(mediaKey);
 								continue;
 							}
+							// Last retry: try to resolve via puppeteer again
+							log('retry:resolve-invalid', { key, url: shortUrl(videoUrl) });
 						}
 
 						// Try to send as video if it's MP4
@@ -385,7 +402,11 @@ export default {
 								continue;
 							}
 							// Last attempt: no valid video, send as text message with link
-							const textWithLink = message + ` <a href="${escapeHtml(videoUrl)}">↗ video</a>`;
+							// Add source link (↗) and player link (▷) to title line
+							const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
+							const absPlayerUrl = new URL(playerUrl, 'https://golissimo.miroshnik.workers.dev').toString();
+							const finalTitleLine = titleLine + ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
+							const textWithLink = aiText ? `${finalTitleLine}\n${aiText}` : finalTitleLine;
 							const reason = !isValidVideo ? 'invalid-url' : isDash ? 'dash-skipped' : 'no-mp4';
 							log('tg:send', { key, method: 'sendMessage-last', reason });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -697,23 +718,48 @@ const validateVideoUrl = async (url: string): Promise<boolean> => {
 		// HEAD request to check Content-Type without downloading full file
 		const response = await fetch(url, {
 			method: 'HEAD',
-			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)' },
+			headers: {
+				'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)',
+				Accept: 'video/*,application/octet-stream',
+			},
+			redirect: 'follow',
 		});
 
 		if (!response.ok) {
-			log('validate:fail', { url: shortUrl(url), status: response.status });
+			log('validate:http-error', { url: shortUrl(url), status: response.status });
 			return false;
 		}
 
-		const contentType = response.headers.get('content-type') || '';
-		const isVideo = contentType.includes('video/') || contentType.includes('application/octet-stream');
+		const contentType = (response.headers.get('content-type') || '').toLowerCase();
+		const contentLength = response.headers.get('content-length');
 
-		log('validate:result', { url: shortUrl(url), contentType, isVideo });
-		return isVideo;
+		// Reject HTML pages explicitly
+		if (contentType.includes('text/html') || contentType.includes('text/plain')) {
+			log('validate:html-page', { url: shortUrl(url), contentType });
+			return false;
+		}
+
+		// Accept video/* content types
+		if (contentType.includes('video/')) {
+			log('validate:ok-video', { url: shortUrl(url), contentType, size: contentLength });
+			return true;
+		}
+
+		// Accept application/octet-stream only if Content-Length suggests video (> 100KB)
+		if (contentType.includes('application/octet-stream')) {
+			const size = contentLength ? parseInt(contentLength, 10) : 0;
+			const isLargeEnough = size > 100000; // > 100KB
+			log('validate:octet-stream', { url: shortUrl(url), size, isLargeEnough });
+			return isLargeEnough;
+		}
+
+		// Reject if Content-Type is missing or unknown
+		log('validate:unknown-type', { url: shortUrl(url), contentType });
+		return false;
 	} catch (error) {
-		log('validate:error', { url: shortUrl(url), error: String(error) });
-		// If validation fails, allow it (might be CORS or network issue)
-		return true;
+		log('validate:network-error', { url: shortUrl(url), error: String(error).slice(0, 100) });
+		// IMPORTANT: Return false on network errors - don't assume URL is valid
+		return false;
 	}
 };
 

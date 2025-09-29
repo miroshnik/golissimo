@@ -343,14 +343,15 @@ export default {
 						// Validate that URL actually points to a video file
 						let isValidVideo = false;
 						if (isVideoUrl) {
-							// Quick check: if URL is from known trusted domains, skip validation
+							// Quick check: only Reddit video domains are trusted without validation
 							const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
-							const isTrusted = isRedditVideo || isYoutubeVideo;
 
-							if (isTrusted) {
-								log('validate:trusted', { url: shortUrl(videoUrl), reddit: isRedditVideo, youtube: isYoutubeVideo });
+							if (isRedditVideo) {
+								log('validate:trusted-reddit', { url: shortUrl(videoUrl) });
 								isValidVideo = true;
 							} else {
+								// YouTube and other URLs must be validated (they may expire, require auth, etc.)
+								log('validate:checking', { url: shortUrl(videoUrl), isYoutube: isYoutubeVideo });
 								isValidVideo = await validateVideoUrl(videoUrl);
 							}
 						}
@@ -373,12 +374,12 @@ export default {
 								const newIsMp4 = videoUrl.endsWith('.mp4');
 								const newIsYoutube = videoUrl.includes('googlevideo.com/videoplayback');
 								const newIsDash = videoUrl.includes('DASH_');
-								// Re-validate the new URL
+								// Re-validate the new URL (only Reddit is trusted)
 								const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
-								const isTrustedNew = isRedditVideo || newIsYoutube;
-								if (isTrustedNew) {
+								if (isRedditVideo) {
 									isValidVideo = true;
 								} else if (newIsMp4 || newIsYoutube) {
+									// YouTube URLs must be validated (they often expire or need auth)
 									isValidVideo = await validateVideoUrl(videoUrl);
 								}
 								log('retry:revalidated', {
@@ -833,7 +834,13 @@ const validateVideoUrl = async (url: string): Promise<boolean> => {
 					}
 				}
 
-				log('validate:ok-video', { url: shortUrl(url), contentType, actualContentType, size: contentLength });
+				// Special warning for YouTube URLs (they may work now but expire soon)
+				const isYouTubeUrl = url.includes('googlevideo.com');
+				if (isYouTubeUrl) {
+					log('validate:youtube-warning', { url: shortUrl(url), note: 'URL may expire' });
+				}
+
+				log('validate:ok-video', { url: shortUrl(url), contentType, actualContentType, size: contentLength, isYouTube: isYouTubeUrl });
 				return true;
 			} catch (rangeError) {
 				log('validate:range-failed', { url: shortUrl(url), error: String(rangeError).slice(0, 50) });

@@ -155,25 +155,51 @@ export default {
 				let videoUrl = extractBestMediaUrl(item.data);
 				let audioUrl: string | null = null;
 				let mediaKind = 'direct';
-				// Strongly prefer Reddit fallback MP4 for Telegram preview
-				const fallbackMp4 = item.data?.media?.reddit_video?.fallback_url as string | undefined;
+				let thumbnailUrl: string | null = null;
+				let videoWidth: number | null = null;
+				let videoHeight: number | null = null;
+				let videoDuration: number | null = null;
+
+				// Extract video metadata from reddit_video if available
+				const redditVideo = item.data?.media?.reddit_video;
+				if (redditVideo) {
+					videoWidth = redditVideo.width || null;
+					videoHeight = redditVideo.height || null;
+					videoDuration = redditVideo.duration || null;
+				}
+
+				// CRITICAL: Prefer fallback_url (full MP4 with audio+video) for Telegram inline playback
+				const fallbackMp4 = redditVideo?.fallback_url as string | undefined;
+				const scraperMp4 = redditVideo?.scraper_media_url as string | undefined;
+
+				// Priority 1: fallback_url or scraper_media_url (usually complete MP4)
 				if (fallbackMp4 && fallbackMp4.endsWith('.mp4')) {
 					videoUrl = fallbackMp4;
 					mediaKind = 'mp4_fallback';
+				} else if (scraperMp4 && scraperMp4.endsWith('.mp4')) {
+					videoUrl = scraperMp4;
+					mediaKind = 'mp4_scraper';
 				}
-				// Try prefer hls_url (muxed av) if available under media.reddit_video
-				const hls = item.data?.media?.reddit_video?.hls_url as string | undefined;
-				if (hls) {
-					// Prefer mp4 for Telegram preview; use HLS only if no mp4 was found
-					if (!(videoUrl && videoUrl.endsWith('.mp4'))) {
-						videoUrl = hls;
-						mediaKind = 'hls';
+
+				// Priority 2: Check if current videoUrl is DASH (incomplete - video only)
+				if (videoUrl && videoUrl.includes('DASH_') && videoUrl.endsWith('.mp4')) {
+					// DASH videos are incomplete (no audio) - skip unless we already have fallback
+					if (mediaKind !== 'mp4_fallback' && mediaKind !== 'mp4_scraper') {
+						// Try to find the muxed version by checking for fallback_url
+						if (!fallbackMp4 && !scraperMp4) {
+							// No complete MP4 available, mark as DASH for potential skip
+							audioUrl = videoUrl.replace(/DASH_[^/.]+\.mp4$/, 'DASH_audio.mp4');
+							mediaKind = 'dash';
+							log('warn:dash-only', { key, url: shortUrl(videoUrl) });
+						}
 					}
-				} else if (videoUrl && videoUrl.includes('DASH_') && videoUrl.endsWith('.mp4')) {
-					// derive audio from DASH_XXX.mp4 -> DASH_audio.mp4
-					audioUrl = videoUrl.replace(/DASH_[^/.]+\.mp4$/, 'DASH_audio.mp4');
-					mediaKind = 'dash';
 				}
+
+				// NEVER use HLS for Telegram - it doesn't support .m3u8 inline playback
+				// HLS is only good for web player, not for Telegram sendVideo
+
+				// Extract thumbnail for better Telegram preview
+				thumbnailUrl = extractBestPreviewImage(item.data);
 
 				// Skip immediately if post already processed or being processed by another run
 				const existingKeyVal = await env.PROCESSED_POSTS_KV.get(key);
@@ -267,11 +293,12 @@ export default {
 
 					try {
 						const safeTitle = escapeHtml(decodeHtmlEntities(title));
-						let message = `${safeTitle} <a href="${escapeHtml(videoUrl)}">↗</a>`;
-						if (videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) {
-							const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
-							const absPlayerUrl = new URL(playerUrl, 'https://golissimo.miroshnik.workers.dev').toString();
-							message += ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
+						// For inline Telegram playback, don't add external player links
+						// Only add source link as fallback
+						let message = safeTitle;
+						// Add source link only for non-video content or as backup
+						if (!videoUrl.endsWith('.mp4')) {
+							message += ` <a href="${escapeHtml(videoUrl)}">↗</a>`;
 						}
 
 						let aiText = '';
@@ -301,31 +328,51 @@ export default {
 						}
 
 						const isMp4 = videoUrl.endsWith('.mp4');
+						const isDash = videoUrl.includes('DASH_');
 						let response: Response;
-						if (isMp4) {
-							log('tg:send', { key, method: 'sendVideo', video: shortUrl(videoUrl) });
+
+						// Try to send as video if it's MP4
+						// DASH videos (video-only) are skipped on early attempts, but sent on last attempt
+						const shouldSendVideo = isMp4 && (!isDash || retriesLeft <= 1);
+
+						if (shouldSendVideo) {
+							const logMsg = isDash ? 'sendVideo-dash-noaudio' : 'sendVideo';
+							log('tg:send', { key, method: logMsg, video: shortUrl(videoUrl), thumb: shortUrl(thumbnailUrl) });
+
+							let caption = message;
+							// Warn user if sending DASH (no audio)
+							if (isDash) {
+								caption += '\n⚠️ no audio';
+							}
+
+							const videoPayload: any = {
+								chat_id: env.TELEGRAM_CHAT_ID,
+								video: videoUrl,
+								caption: caption,
+								parse_mode: 'HTML',
+								supports_streaming: true,
+							};
+							// Add metadata for better preview generation
+							if (thumbnailUrl) videoPayload.thumbnail = thumbnailUrl;
+							if (videoWidth) videoPayload.width = videoWidth;
+							if (videoHeight) videoPayload.height = videoHeight;
+							if (videoDuration) videoPayload.duration = Math.floor(videoDuration);
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendVideo`, {
 								method: 'POST',
 								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify({
-									chat_id: env.TELEGRAM_CHAT_ID,
-									video: videoUrl,
-									caption: message,
-									parse_mode: 'HTML',
-									supports_streaming: true,
-								}),
+								body: JSON.stringify(videoPayload),
 							});
 						} else {
-							// No mp4 extracted
+							// Not MP4 or should retry to find better version
 							if (retriesLeft > 1) {
-								log('skip:no-mp4', { key, retriesLeft });
+								log('skip:incomplete-video', { key, retriesLeft, isDash, isMp4, url: shortUrl(videoUrl) });
 								await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
 								await env.PROCESSED_POSTS_KV.delete(mediaKey);
 								continue;
 							}
-							// Last attempt: header already contains ↗; keep tags line clean
-							const textWithLink = message;
-							log('tg:send', { key, method: 'sendMessage-last' });
+							// Last attempt: no MP4 at all, send as text message with link
+							const textWithLink = message + ` <a href="${escapeHtml(videoUrl)}">↗ video</a>`;
+							log('tg:send', { key, method: 'sendMessage-last', reason: 'no-mp4-at-all' });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 								method: 'POST',
 								headers: { 'Content-Type': 'application/json' },
@@ -437,11 +484,28 @@ const canonicalizeUrl = (rawUrl: string): string => {
 };
 
 const extractBestMediaUrl = (d: any): string | null => {
-	// 1) Native Reddit video
-	const video = d?.media?.reddit_video?.fallback_url;
-	if (video) return String(video);
+	// 1) Native Reddit video - try different quality options
+	const redditVideo = d?.media?.reddit_video;
+	if (redditVideo) {
+		// Try fallback_url first (usually 720p or 480p)
+		if (redditVideo.fallback_url) return String(redditVideo.fallback_url);
+		// Try scraper_media_url as alternative
+		if (redditVideo.scraper_media_url) return String(redditVideo.scraper_media_url);
+		// HLS url (muxed audio+video)
+		if (redditVideo.hls_url) return String(redditVideo.hls_url);
+	}
 
-	// 2) Gallery posts (multiple images)
+	// 2) Preview variants - prefer MP4 over GIF for better quality
+	const pimg = d?.preview?.images?.[0];
+	if (pimg?.variants) {
+		// Try mp4 variant first (usually better quality than gif)
+		const mp4 = pimg.variants?.mp4?.source?.url;
+		if (mp4) return decodeRedditUrl(String(mp4));
+		const gif = pimg.variants?.gif?.source?.url;
+		if (gif) return decodeRedditUrl(String(gif));
+	}
+
+	// 3) Gallery posts (multiple images)
 	if (d?.is_gallery && d?.gallery_data?.items && d?.media_metadata) {
 		for (const it of d.gallery_data.items as any[]) {
 			const meta = d.media_metadata?.[it.media_id];
@@ -452,18 +516,10 @@ const extractBestMediaUrl = (d: any): string | null => {
 		}
 	}
 
-	// 3) Preview (image/gif/mp4)
-	const pimg = d?.preview?.images?.[0];
-	if (pimg) {
-		const mp4 = pimg.variants?.mp4?.source?.url;
-		if (mp4) return decodeRedditUrl(String(mp4));
-		const gif = pimg.variants?.gif?.source?.url;
-		if (gif) return decodeRedditUrl(String(gif));
-		const src = pimg.source?.url;
-		if (src) return decodeRedditUrl(String(src));
-	}
+	// 4) Preview image source
+	if (pimg?.source?.url) return decodeRedditUrl(String(pimg.source.url));
 
-	// 4) Overridden URL or direct image
+	// 5) Overridden URL or direct media link
 	const overridden = d?.url_overridden_by_dest;
 	if (overridden) return String(overridden);
 	const url = d?.url;

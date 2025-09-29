@@ -48,25 +48,53 @@ export default {
 			const deleted = await clearKvPrefix(env, prefix);
 			return Response.json({ deleted, prefix });
 		}
-		if (url.pathname === '/proxy') {
-			const src = url.searchParams.get('url') || '';
-			try {
-				const u = new URL(src);
-				if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-					return new Response('Bad Request', { status: 400 });
-				}
-				const resp = await fetch(u.toString(), {
-					headers: { 'User-Agent': 'Mozilla/5.0' },
-					cf: { cacheTtl: 300, cacheEverything: true },
-				});
-				const headers = new Headers(resp.headers);
-				headers.set('Cache-Control', 'public, max-age=300');
-				headers.delete('Set-Cookie');
-				return new Response(resp.body, { status: resp.status, headers });
-			} catch {
+	if (url.pathname === '/proxy') {
+		const src = url.searchParams.get('url') || '';
+		try {
+			const u = new URL(src);
+			if (u.protocol !== 'http:' && u.protocol !== 'https:') {
 				return new Response('Bad Request', { status: 400 });
 			}
+			const resp = await fetch(u.toString(), {
+				headers: { 
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+					'Accept': 'video/*,*/*',
+					'Referer': u.origin,
+				},
+				cf: { cacheTtl: 300, cacheEverything: true },
+			});
+			
+			if (!resp.ok) {
+				log('proxy:error', { url: shortUrl(src), status: resp.status });
+				return new Response('Upstream Error', { status: resp.status });
+			}
+			
+			const headers = new Headers();
+			// Force video content type if original is wrong
+			const originalContentType = resp.headers.get('content-type') || '';
+			if (originalContentType.includes('text/html')) {
+				// Server returned HTML - this won't work for Telegram
+				log('proxy:html-detected', { url: shortUrl(src), contentType: originalContentType });
+				return new Response('Not a video', { status: 400 });
+			}
+			
+			// Copy important headers
+			headers.set('Content-Type', originalContentType || 'video/mp4');
+			headers.set('Cache-Control', 'public, max-age=300');
+			headers.set('Accept-Ranges', resp.headers.get('accept-ranges') || 'bytes');
+			
+			const contentLength = resp.headers.get('content-length');
+			if (contentLength) {
+				headers.set('Content-Length', contentLength);
+			}
+			
+			log('proxy:success', { url: shortUrl(src), contentType: originalContentType, size: contentLength });
+			return new Response(resp.body, { status: resp.status, headers });
+		} catch (e) {
+			log('proxy:exception', { url: shortUrl(src), error: String(e).slice(0, 100) });
+			return new Response('Bad Request', { status: 400 });
 		}
+	}
 		if (url.pathname === '/player') {
 			const video = url.searchParams.get('video') || '';
 			const audio = url.searchParams.get('audio') || '';

@@ -48,53 +48,53 @@ export default {
 			const deleted = await clearKvPrefix(env, prefix);
 			return Response.json({ deleted, prefix });
 		}
-	if (url.pathname === '/proxy') {
-		const src = url.searchParams.get('url') || '';
-		try {
-			const u = new URL(src);
-			if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+		if (url.pathname === '/proxy') {
+			const src = url.searchParams.get('url') || '';
+			try {
+				const u = new URL(src);
+				if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+					return new Response('Bad Request', { status: 400 });
+				}
+				const resp = await fetch(u.toString(), {
+					headers: {
+						'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+						Accept: 'video/*,*/*',
+						Referer: u.origin,
+					},
+					cf: { cacheTtl: 300, cacheEverything: true },
+				});
+
+				if (!resp.ok) {
+					log('proxy:error', { url: shortUrl(src), status: resp.status });
+					return new Response('Upstream Error', { status: resp.status });
+				}
+
+				const headers = new Headers();
+				// Force video content type if original is wrong
+				const originalContentType = resp.headers.get('content-type') || '';
+				if (originalContentType.includes('text/html')) {
+					// Server returned HTML - this won't work for Telegram
+					log('proxy:html-detected', { url: shortUrl(src), contentType: originalContentType });
+					return new Response('Not a video', { status: 400 });
+				}
+
+				// Copy important headers
+				headers.set('Content-Type', originalContentType || 'video/mp4');
+				headers.set('Cache-Control', 'public, max-age=300');
+				headers.set('Accept-Ranges', resp.headers.get('accept-ranges') || 'bytes');
+
+				const contentLength = resp.headers.get('content-length');
+				if (contentLength) {
+					headers.set('Content-Length', contentLength);
+				}
+
+				log('proxy:success', { url: shortUrl(src), contentType: originalContentType, size: contentLength });
+				return new Response(resp.body, { status: resp.status, headers });
+			} catch (e) {
+				log('proxy:exception', { url: shortUrl(src), error: String(e).slice(0, 100) });
 				return new Response('Bad Request', { status: 400 });
 			}
-			const resp = await fetch(u.toString(), {
-				headers: { 
-					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-					'Accept': 'video/*,*/*',
-					'Referer': u.origin,
-				},
-				cf: { cacheTtl: 300, cacheEverything: true },
-			});
-			
-			if (!resp.ok) {
-				log('proxy:error', { url: shortUrl(src), status: resp.status });
-				return new Response('Upstream Error', { status: resp.status });
-			}
-			
-			const headers = new Headers();
-			// Force video content type if original is wrong
-			const originalContentType = resp.headers.get('content-type') || '';
-			if (originalContentType.includes('text/html')) {
-				// Server returned HTML - this won't work for Telegram
-				log('proxy:html-detected', { url: shortUrl(src), contentType: originalContentType });
-				return new Response('Not a video', { status: 400 });
-			}
-			
-			// Copy important headers
-			headers.set('Content-Type', originalContentType || 'video/mp4');
-			headers.set('Cache-Control', 'public, max-age=300');
-			headers.set('Accept-Ranges', resp.headers.get('accept-ranges') || 'bytes');
-			
-			const contentLength = resp.headers.get('content-length');
-			if (contentLength) {
-				headers.set('Content-Length', contentLength);
-			}
-			
-			log('proxy:success', { url: shortUrl(src), contentType: originalContentType, size: contentLength });
-			return new Response(resp.body, { status: resp.status, headers });
-		} catch (e) {
-			log('proxy:exception', { url: shortUrl(src), error: String(e).slice(0, 100) });
-			return new Response('Bad Request', { status: 400 });
 		}
-	}
 		if (url.pathname === '/player') {
 			const video = url.searchParams.get('video') || '';
 			const audio = url.searchParams.get('audio') || '';
@@ -432,28 +432,22 @@ export default {
 						const finalIsDash = videoUrl.includes('DASH_');
 						const shouldSendVideo = finalIsVideoUrl && isValidVideo && (!finalIsDash || retriesLeft <= 1);
 
-						if (shouldSendVideo) {
+						// Check if source is trusted before sending
+						const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
+						const isYouTubeVideo = videoUrl.includes('googlevideo.com');
+						const isTrustedSource = isRedditVideo || isYouTubeVideo;
+
+						// For non-trusted sources, retry instead of sending (they often fail in Telegram)
+						if (shouldSendVideo && !isTrustedSource && retriesLeft > 1) {
+							log('skip:untrusted-source', { key, retriesLeft, url: shortUrl(videoUrl), reason: 'external-url-retry' });
+							await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
+							await env.PROCESSED_POSTS_KV.delete(mediaKey);
+							continue;
+						}
+
+						if (shouldSendVideo && isTrustedSource) {
 							const logMsg = finalIsDash ? 'sendVideo-dash-noaudio' : 'sendVideo';
-
-							// For external non-Reddit URLs, use proxy to avoid IP-based blocking
-							const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
-							const isYouTubeVideo = videoUrl.includes('googlevideo.com');
-							const needsProxy = !isRedditVideo && !isYouTubeVideo && finalIsMp4;
-
-							let finalVideoUrl = videoUrl;
-							if (needsProxy) {
-								// Proxy through our Worker to bypass IP restrictions
-								finalVideoUrl = `https://golissimo.miroshnik.workers.dev/proxy?url=${encodeURIComponent(videoUrl)}`;
-								log('tg:send', {
-									key,
-									method: logMsg + '-proxied',
-									video: shortUrl(videoUrl),
-									proxy: shortUrl(finalVideoUrl),
-									thumb: shortUrl(thumbnailUrl),
-								});
-							} else {
-								log('tg:send', { key, method: logMsg, video: shortUrl(videoUrl), thumb: shortUrl(thumbnailUrl) });
-							}
+							log('tg:send', { key, method: logMsg, video: shortUrl(videoUrl), trusted: true, thumb: shortUrl(thumbnailUrl) });
 
 							let caption = message;
 							// Warn user if sending DASH (no audio)
@@ -463,7 +457,7 @@ export default {
 
 							const videoPayload: any = {
 								chat_id: env.TELEGRAM_CHAT_ID,
-								video: finalVideoUrl,
+								video: videoUrl,
 								caption: caption,
 								parse_mode: 'HTML',
 								supports_streaming: true,
@@ -481,19 +475,25 @@ export default {
 						} else {
 							// Not valid video or should retry to find better version
 							if (retriesLeft > 1) {
-								const reason = !isValidVideo ? 'invalid-url' : finalIsDash ? 'dash' : 'no-mp4';
+								const reason = !isValidVideo ? 'invalid-url' : finalIsDash ? 'dash' : !isTrustedSource ? 'untrusted' : 'no-mp4';
 								log('skip:incomplete-video', { key, retriesLeft, reason, url: shortUrl(videoUrl) });
 								await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
 								await env.PROCESSED_POSTS_KV.delete(mediaKey);
 								continue;
 							}
-							// Last attempt: no valid video, send as text message with link
+							// Last attempt: no valid video or untrusted source, send as text message with link
 							// Add source link (↗) and player link (▷) to title line
 							const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
 							const absPlayerUrl = new URL(playerUrl, 'https://golissimo.miroshnik.workers.dev').toString();
 							const finalTitleLine = titleLine + ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
 							const textWithLink = aiText ? `${finalTitleLine}\n${aiText}` : finalTitleLine;
-							const reason = !isValidVideo ? 'invalid-url' : finalIsDash ? 'dash-skipped' : 'no-mp4';
+							const reason = !isValidVideo
+								? 'invalid-url'
+								: finalIsDash
+								? 'dash-skipped'
+								: !isTrustedSource
+								? 'untrusted-source'
+								: 'no-mp4';
 							log('tg:send', { key, method: 'sendMessage-last', reason });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 								method: 'POST',

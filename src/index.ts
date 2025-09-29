@@ -370,6 +370,47 @@ export default {
 							message += `\n${aiText}`;
 						}
 
+						// Check if this is an image
+						const isImage = videoUrl && isDirectImageUrl(videoUrl);
+
+						// Handle images with sendPhoto
+						if (isImage) {
+							log('tg:send', { key, method: 'sendPhoto', photo: shortUrl(videoUrl) });
+							try {
+								const response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendPhoto`, {
+									method: 'POST',
+									headers: { 'Content-Type': 'application/json' },
+									body: JSON.stringify({
+										chat_id: env.TELEGRAM_CHAT_ID,
+										photo: videoUrl,
+										caption: message,
+										parse_mode: 'HTML',
+									}),
+								});
+
+								if (!response.ok) {
+									let bodyText = '';
+									try {
+										bodyText = await response.text();
+									} catch {}
+									console.error('tg:error', { status: response.status, statusText: response.statusText, body: bodyText.slice(0, 500) });
+									await env.PROCESSED_POSTS_KV.delete(mediaKey);
+									await env.PROCESSED_POSTS_KV.delete(key);
+									continue;
+								}
+
+								log('tg:ok', { key, type: 'photo' });
+								await env.PROCESSED_POSTS_KV.put(key, '0', { expirationTtl: 604800 });
+								await env.PROCESSED_POSTS_KV.put(mediaKey, '1', { expirationTtl: 604800 });
+								continue; // Skip video processing
+							} catch (e) {
+								console.error('pipeline:error', e);
+								await env.PROCESSED_POSTS_KV.delete(mediaKey);
+								await env.PROCESSED_POSTS_KV.delete(key);
+								continue;
+							}
+						}
+
 						const isMp4 = videoUrl.endsWith('.mp4');
 						const isYoutubeVideo = videoUrl.includes('googlevideo.com/videoplayback');
 						const isVideoUrl = isMp4 || isYoutubeVideo;

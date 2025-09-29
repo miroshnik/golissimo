@@ -349,31 +349,52 @@ export default {
 							}
 						}
 
-						if (!isValidVideo && isMp4) {
-							// URL looks like MP4 but isn't actually a video (HTML page, redirect, etc.)
-							if (retriesLeft > 1) {
-								log('skip:invalid-video-url', { key, retriesLeft, url: shortUrl(videoUrl) });
-								await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
-								await env.PROCESSED_POSTS_KV.delete(mediaKey);
-								continue;
-							}
-							// Last retry: try to resolve via puppeteer again
-							log('retry:resolve-invalid', { key, url: shortUrl(videoUrl) });
+					if (!isValidVideo && isMp4) {
+						// URL looks like MP4 but isn't actually a video (HTML page, redirect, etc.)
+						if (retriesLeft > 1) {
+							log('skip:invalid-video-url', { key, retriesLeft, url: shortUrl(videoUrl) });
+							await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
+							await env.PROCESSED_POSTS_KV.delete(mediaKey);
+							continue;
 						}
+					// Last retry: this is HTML, try to resolve via puppeteer to find real video
+					log('retry:resolve-html', { key, url: shortUrl(videoUrl) });
+					const resolvedFromHtml = await getFinalStreamUrl(env, videoUrl);
+					if (resolvedFromHtml && resolvedFromHtml !== videoUrl) {
+						log('retry:found-new', { key, old: shortUrl(videoUrl), new: shortUrl(resolvedFromHtml) });
+						videoUrl = resolvedFromHtml;
+						// Update checks for new URL
+						const newIsMp4 = videoUrl.endsWith('.mp4');
+						const newIsDash = videoUrl.includes('DASH_');
+						// Re-validate the new URL
+						const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
+						if (isRedditVideo) {
+							isValidVideo = true;
+						} else if (newIsMp4) {
+							isValidVideo = await validateVideoUrl(videoUrl);
+						}
+						log('retry:revalidated', { key, url: shortUrl(videoUrl), isValid: isValidVideo, isMp4: newIsMp4, isDash: newIsDash });
+					} else {
+						log('retry:no-new-url', { key, url: shortUrl(videoUrl) });
+					}
+				}
 
-						// Try to send as video if it's MP4
-						// DASH videos (video-only) are skipped on early attempts, but sent on last attempt
-						const shouldSendVideo = isMp4 && isValidVideo && (!isDash || retriesLeft <= 1);
+					// Try to send as video if it's MP4
+					// DASH videos (video-only) are skipped on early attempts, but sent on last attempt
+					// Re-check isMp4 and isDash in case URL changed
+					const finalIsMp4 = videoUrl.endsWith('.mp4');
+					const finalIsDash = videoUrl.includes('DASH_');
+					const shouldSendVideo = finalIsMp4 && isValidVideo && (!finalIsDash || retriesLeft <= 1);
 
-						if (shouldSendVideo) {
-							const logMsg = isDash ? 'sendVideo-dash-noaudio' : 'sendVideo';
-							log('tg:send', { key, method: logMsg, video: shortUrl(videoUrl), thumb: shortUrl(thumbnailUrl) });
+					if (shouldSendVideo) {
+						const logMsg = finalIsDash ? 'sendVideo-dash-noaudio' : 'sendVideo';
+						log('tg:send', { key, method: logMsg, video: shortUrl(videoUrl), thumb: shortUrl(thumbnailUrl) });
 
-							let caption = message;
-							// Warn user if sending DASH (no audio)
-							if (isDash) {
-								caption += '\n⚠️ no audio';
-							}
+						let caption = message;
+						// Warn user if sending DASH (no audio)
+						if (finalIsDash) {
+							caption += '\n⚠️ no audio';
+						}
 
 							const videoPayload: any = {
 								chat_id: env.TELEGRAM_CHAT_ID,
@@ -392,29 +413,29 @@ export default {
 								headers: { 'Content-Type': 'application/json' },
 								body: JSON.stringify(videoPayload),
 							});
-						} else {
-							// Not valid video or should retry to find better version
-							if (retriesLeft > 1) {
-								const reason = !isValidVideo ? 'invalid-url' : isDash ? 'dash' : 'no-mp4';
-								log('skip:incomplete-video', { key, retriesLeft, reason, url: shortUrl(videoUrl) });
-								await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
-								await env.PROCESSED_POSTS_KV.delete(mediaKey);
-								continue;
-							}
-							// Last attempt: no valid video, send as text message with link
-							// Add source link (↗) and player link (▷) to title line
-							const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
-							const absPlayerUrl = new URL(playerUrl, 'https://golissimo.miroshnik.workers.dev').toString();
-							const finalTitleLine = titleLine + ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
-							const textWithLink = aiText ? `${finalTitleLine}\n${aiText}` : finalTitleLine;
-							const reason = !isValidVideo ? 'invalid-url' : isDash ? 'dash-skipped' : 'no-mp4';
-							log('tg:send', { key, method: 'sendMessage-last', reason });
-							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-								method: 'POST',
-								headers: { 'Content-Type': 'application/json' },
-								body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: textWithLink, parse_mode: 'HTML' }),
-							});
+					} else {
+						// Not valid video or should retry to find better version
+						if (retriesLeft > 1) {
+							const reason = !isValidVideo ? 'invalid-url' : finalIsDash ? 'dash' : 'no-mp4';
+							log('skip:incomplete-video', { key, retriesLeft, reason, url: shortUrl(videoUrl) });
+							await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
+							await env.PROCESSED_POSTS_KV.delete(mediaKey);
+							continue;
 						}
+						// Last attempt: no valid video, send as text message with link
+						// Add source link (↗) and player link (▷) to title line
+						const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
+						const absPlayerUrl = new URL(playerUrl, 'https://golissimo.miroshnik.workers.dev').toString();
+						const finalTitleLine = titleLine + ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
+						const textWithLink = aiText ? `${finalTitleLine}\n${aiText}` : finalTitleLine;
+						const reason = !isValidVideo ? 'invalid-url' : finalIsDash ? 'dash-skipped' : 'no-mp4';
+						log('tg:send', { key, method: 'sendMessage-last', reason });
+						response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: textWithLink, parse_mode: 'HTML' }),
+						});
+					}
 
 						if (!response.ok) {
 							let bodyText = '';

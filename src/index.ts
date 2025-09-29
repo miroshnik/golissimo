@@ -234,15 +234,17 @@ export default {
 
 				log('process:start', { key, title });
 
-				if (
-					videoUrl &&
-					!(videoUrl.includes('youtube') || videoUrl.includes('youtu.be') || isDirectImageUrl(videoUrl)) &&
-					!videoUrl.includes('.mp4')
-				) {
-					log('resolve:open', { key, url: shortUrl(videoUrl) });
+				// Try to resolve non-MP4 URLs (including YouTube, external sites, etc.)
+				if (videoUrl && !isDirectImageUrl(videoUrl) && !videoUrl.includes('.mp4')) {
+					const isYoutube = videoUrl.includes('youtube') || videoUrl.includes('youtu.be');
+					log('resolve:open', { key, url: shortUrl(videoUrl), isYoutube });
 					const resolved = await getFinalStreamUrl(env, videoUrl);
-					if (resolved) videoUrl = resolved;
-					log('resolve:done', { key, url: shortUrl(videoUrl) });
+					if (resolved && resolved !== videoUrl) {
+						videoUrl = resolved;
+						log('resolve:done', { key, url: shortUrl(videoUrl) });
+					} else {
+						log('resolve:no-change', { key, url: shortUrl(videoUrl) });
+					}
 				}
 
 				log('media:final', { key, url: shortUrl(videoUrl), isImage: !!(videoUrl && isDirectImageUrl(videoUrl)) });
@@ -333,24 +335,28 @@ export default {
 						}
 
 						const isMp4 = videoUrl.endsWith('.mp4');
+						const isYoutubeVideo = videoUrl.includes('googlevideo.com/videoplayback');
+						const isVideoUrl = isMp4 || isYoutubeVideo;
 						const isDash = videoUrl.includes('DASH_');
 						let response: Response;
 
 						// Validate that URL actually points to a video file
 						let isValidVideo = false;
-						if (isMp4) {
-							// Quick check: if URL is from known Reddit video domains, skip validation
+						if (isVideoUrl) {
+							// Quick check: if URL is from known trusted domains, skip validation
 							const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
-							if (isRedditVideo) {
-								log('validate:reddit-trusted', { url: shortUrl(videoUrl) });
+							const isTrusted = isRedditVideo || isYoutubeVideo;
+
+							if (isTrusted) {
+								log('validate:trusted', { url: shortUrl(videoUrl), reddit: isRedditVideo, youtube: isYoutubeVideo });
 								isValidVideo = true;
 							} else {
 								isValidVideo = await validateVideoUrl(videoUrl);
 							}
 						}
 
-						if (!isValidVideo && isMp4) {
-							// URL looks like MP4 but isn't actually a video (HTML page, redirect, etc.)
+						if (!isValidVideo && isVideoUrl) {
+							// URL looks like video but isn't actually valid (HTML page, redirect, etc.)
 							if (retriesLeft > 1) {
 								log('skip:invalid-video-url', { key, retriesLeft, url: shortUrl(videoUrl) });
 								await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
@@ -365,26 +371,37 @@ export default {
 								videoUrl = resolvedFromHtml;
 								// Update checks for new URL
 								const newIsMp4 = videoUrl.endsWith('.mp4');
+								const newIsYoutube = videoUrl.includes('googlevideo.com/videoplayback');
 								const newIsDash = videoUrl.includes('DASH_');
 								// Re-validate the new URL
 								const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
-								if (isRedditVideo) {
+								const isTrustedNew = isRedditVideo || newIsYoutube;
+								if (isTrustedNew) {
 									isValidVideo = true;
-								} else if (newIsMp4) {
+								} else if (newIsMp4 || newIsYoutube) {
 									isValidVideo = await validateVideoUrl(videoUrl);
 								}
-								log('retry:revalidated', { key, url: shortUrl(videoUrl), isValid: isValidVideo, isMp4: newIsMp4, isDash: newIsDash });
+								log('retry:revalidated', {
+									key,
+									url: shortUrl(videoUrl),
+									isValid: isValidVideo,
+									isMp4: newIsMp4,
+									isYoutube: newIsYoutube,
+									isDash: newIsDash,
+								});
 							} else {
 								log('retry:no-new-url', { key, url: shortUrl(videoUrl) });
 							}
 						}
 
-						// Try to send as video if it's MP4
+						// Try to send as video if it's a valid video URL
 						// DASH videos (video-only) are skipped on early attempts, but sent on last attempt
-						// Re-check isMp4 and isDash in case URL changed
+						// Re-check video URL type and isDash in case URL changed
 						const finalIsMp4 = videoUrl.endsWith('.mp4');
+						const finalIsYoutube = videoUrl.includes('googlevideo.com/videoplayback');
+						const finalIsVideoUrl = finalIsMp4 || finalIsYoutube;
 						const finalIsDash = videoUrl.includes('DASH_');
-						const shouldSendVideo = finalIsMp4 && isValidVideo && (!finalIsDash || retriesLeft <= 1);
+						const shouldSendVideo = finalIsVideoUrl && isValidVideo && (!finalIsDash || retriesLeft <= 1);
 
 						if (shouldSendVideo) {
 							const logMsg = finalIsDash ? 'sendVideo-dash-noaudio' : 'sendVideo';
@@ -731,16 +748,29 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 };
 
 const isMp4Url = (url: string): boolean => {
-	return url.includes('.mp4') && !url.includes('DASH_96.');
+	// Check for direct .mp4 URLs (excluding low quality DASH_96)
+	if (url.includes('.mp4') && !url.includes('DASH_96.')) {
+		return true;
+	}
+	// Check for YouTube videoplayback URLs (googlevideo.com/videoplayback)
+	if (url.includes('googlevideo.com/videoplayback')) {
+		return true;
+	}
+	// Check for other common video CDN patterns
+	if (url.includes('/video') && (url.includes('mime=video') || url.includes('contenttype=video'))) {
+		return true;
+	}
+	return false;
 };
 
 const validateVideoUrl = async (url: string): Promise<boolean> => {
 	try {
 		// HEAD request to check Content-Type without downloading full file
+		// Use Telegram-like User-Agent to match what Telegram will see
 		const response = await fetch(url, {
 			method: 'HEAD',
 			headers: {
-				'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)',
+				'User-Agent': 'TelegramBot (like TwitterBot)',
 				Accept: 'video/*,application/octet-stream',
 			},
 			redirect: 'follow',
@@ -767,7 +797,7 @@ const validateVideoUrl = async (url: string): Promise<boolean> => {
 				const getResponse = await fetch(url, {
 					method: 'GET',
 					headers: {
-						'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)',
+						'User-Agent': 'TelegramBot (like TwitterBot)',
 						Accept: 'video/*,application/octet-stream',
 						Range: 'bytes=0-1023', // First 1KB
 					},

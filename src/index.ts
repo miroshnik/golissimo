@@ -350,11 +350,19 @@ export default {
 								.join(' ');
 						}
 
-						// Build message: title (with source link) + hashtags on new line
+						// Build message: title (with source link and player link) + hashtags on new line
 						let titleLine = safeTitle;
-						// Always add source link for video content
+						// Always add source link and player link for video content
 						if (videoUrl) {
 							titleLine += ` <a href="${escapeHtml(videoUrl)}">↗</a>`;
+							// Add player link for MP4 and M3U8 videos
+							if (videoUrl.includes('.mp4') || videoUrl.includes('.m3u8')) {
+								const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${
+									audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''
+								}`;
+								const absPlayerUrl = new URL(playerUrl, 'https://golissimo.miroshnik.workers.dev').toString();
+								titleLine += ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
+							}
 						}
 
 						let message = titleLine;
@@ -501,11 +509,8 @@ export default {
 								continue;
 							}
 							// Last attempt: no valid video or untrusted source, send as text message with link
-							// Add source link (↗) and player link (▷) to title line
-							const playerUrl = `/player?video=${encodeURIComponent(videoUrl)}${audioUrl ? `&audio=${encodeURIComponent(audioUrl)}` : ''}`;
-							const absPlayerUrl = new URL(playerUrl, 'https://golissimo.miroshnik.workers.dev').toString();
-							const finalTitleLine = titleLine + ` <a href="${escapeHtml(absPlayerUrl)}">▷</a>`;
-							const textWithLink = aiText ? `${finalTitleLine}\n${aiText}` : finalTitleLine;
+							// Links already added to titleLine above (↗ source and ▷ player)
+							const textWithLink = aiText ? `${titleLine}\n${aiText}` : titleLine;
 							const reason = !isValidVideo
 								? 'invalid-url'
 								: finalIsDash

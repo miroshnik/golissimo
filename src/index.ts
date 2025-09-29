@@ -331,9 +331,22 @@ export default {
 						const isDash = videoUrl.includes('DASH_');
 						let response: Response;
 
+						// Validate that URL actually points to a video file
+						const isValidVideo = isMp4 ? await validateVideoUrl(videoUrl) : false;
+
+						if (!isValidVideo && isMp4) {
+							// URL looks like MP4 but isn't actually a video (HTML page, redirect, etc.)
+							if (retriesLeft > 1) {
+								log('skip:invalid-video-url', { key, retriesLeft, url: shortUrl(videoUrl) });
+								await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
+								await env.PROCESSED_POSTS_KV.delete(mediaKey);
+								continue;
+							}
+						}
+
 						// Try to send as video if it's MP4
 						// DASH videos (video-only) are skipped on early attempts, but sent on last attempt
-						const shouldSendVideo = isMp4 && (!isDash || retriesLeft <= 1);
+						const shouldSendVideo = isMp4 && isValidVideo && (!isDash || retriesLeft <= 1);
 
 						if (shouldSendVideo) {
 							const logMsg = isDash ? 'sendVideo-dash-noaudio' : 'sendVideo';
@@ -363,16 +376,18 @@ export default {
 								body: JSON.stringify(videoPayload),
 							});
 						} else {
-							// Not MP4 or should retry to find better version
+							// Not valid video or should retry to find better version
 							if (retriesLeft > 1) {
-								log('skip:incomplete-video', { key, retriesLeft, isDash, isMp4, url: shortUrl(videoUrl) });
+								const reason = !isValidVideo ? 'invalid-url' : isDash ? 'dash' : 'no-mp4';
+								log('skip:incomplete-video', { key, retriesLeft, reason, url: shortUrl(videoUrl) });
 								await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
 								await env.PROCESSED_POSTS_KV.delete(mediaKey);
 								continue;
 							}
-							// Last attempt: no MP4 at all, send as text message with link
+							// Last attempt: no valid video, send as text message with link
 							const textWithLink = message + ` <a href="${escapeHtml(videoUrl)}">↗ video</a>`;
-							log('tg:send', { key, method: 'sendMessage-last', reason: 'no-mp4-at-all' });
+							const reason = !isValidVideo ? 'invalid-url' : isDash ? 'dash-skipped' : 'no-mp4';
+							log('tg:send', { key, method: 'sendMessage-last', reason });
 							response = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
 								method: 'POST',
 								headers: { 'Content-Type': 'application/json' },
@@ -641,6 +656,31 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 
 const isMp4Url = (url: string): boolean => {
 	return url.includes('.mp4') && !url.includes('DASH_96.');
+};
+
+const validateVideoUrl = async (url: string): Promise<boolean> => {
+	try {
+		// HEAD request to check Content-Type without downloading full file
+		const response = await fetch(url, {
+			method: 'HEAD',
+			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)' },
+		});
+
+		if (!response.ok) {
+			log('validate:fail', { url: shortUrl(url), status: response.status });
+			return false;
+		}
+
+		const contentType = response.headers.get('content-type') || '';
+		const isVideo = contentType.includes('video/') || contentType.includes('application/octet-stream');
+
+		log('validate:result', { url: shortUrl(url), contentType, isVideo });
+		return isVideo;
+	} catch (error) {
+		log('validate:error', { url: shortUrl(url), error: String(error) });
+		// If validation fails, allow it (might be CORS or network issue)
+		return true;
+	}
 };
 
 const isDirectImageUrl = (url: string): boolean => {

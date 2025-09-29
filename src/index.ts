@@ -406,7 +406,26 @@ export default {
 
 						if (shouldSendVideo) {
 							const logMsg = finalIsDash ? 'sendVideo-dash-noaudio' : 'sendVideo';
-							log('tg:send', { key, method: logMsg, video: shortUrl(videoUrl), thumb: shortUrl(thumbnailUrl) });
+
+							// For external non-Reddit URLs, use proxy to avoid IP-based blocking
+							const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
+							const isYouTubeVideo = videoUrl.includes('googlevideo.com');
+							const needsProxy = !isRedditVideo && !isYouTubeVideo && finalIsMp4;
+
+							let finalVideoUrl = videoUrl;
+							if (needsProxy) {
+								// Proxy through our Worker to bypass IP restrictions
+								finalVideoUrl = `https://golissimo.miroshnik.workers.dev/proxy?url=${encodeURIComponent(videoUrl)}`;
+								log('tg:send', {
+									key,
+									method: logMsg + '-proxied',
+									video: shortUrl(videoUrl),
+									proxy: shortUrl(finalVideoUrl),
+									thumb: shortUrl(thumbnailUrl),
+								});
+							} else {
+								log('tg:send', { key, method: logMsg, video: shortUrl(videoUrl), thumb: shortUrl(thumbnailUrl) });
+							}
 
 							let caption = message;
 							// Warn user if sending DASH (no audio)
@@ -416,7 +435,7 @@ export default {
 
 							const videoPayload: any = {
 								chat_id: env.TELEGRAM_CHAT_ID,
-								video: videoUrl,
+								video: finalVideoUrl,
 								caption: caption,
 								parse_mode: 'HTML',
 								supports_streaming: true,

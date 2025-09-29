@@ -296,29 +296,35 @@ export default {
 						log('reserve:move', { key, from: rawMediaKey, to: mediaKey });
 					}
 					const prompt = `
-					Извлеки хештеги из строки.
-			Только хештеги, через пробел. Никаких комментариев и кода.
+				Извлеки хештеги из строки.
+		Только хештеги, через пробел. Никаких комментариев и кода.
 
-			Правила генерации:
-			- Используй только названия команд и игроков.
-			- ВАЖНО: в теле тега допускаются ТОЛЬКО английские буквы (A-Z, a-z) и цифры (0-9). Диакритики замени: ä→a, ö→o, å→a, é→e, ñ→n и т.п. Прочие символы удали.
-			- В конце добавь ОДИН тег события из списка: #Goal #Assist #Save #RedCard #YellowCard #Penalty #PenaltyMiss #OwnGoal #Injury #Transfer #Interview.
-			- Запрещено ставить #Goal, если в строке нет явных признаков гола (счёт вида "x - y", минуты "45'", глаголов score/scored/goal/GOL и т.п.). Для цитат/интервью/пресс-конференций выбирай #Interview.
-			- Подсказки: слова вроде "says", "quote", кавычки с речью игрока/тренера, метки IG/Instagram обычно означают интервью/цитату → #Interview.
-			- Порядок тегов: команды → игроки → событие.
-			- Если команд/игроков нет — выбери 1–3 ключевых тега по смыслу + событие.
+		Правила генерации:
+		- Используй только названия команд и игроков.
+		- ВАЖНО: в теле тега допускаются ТОЛЬКО английские буквы (A-Z, a-z) и цифры (0-9). Диакритики замени: ä→a, ö→o, å→a, é→e, ñ→n и т.п. Прочие символы удали.
+		- В конце добавь ОДИН тег события из списка: #Goal #Assist #Save #RedCard #YellowCard #Penalty #PenaltyMiss #OwnGoal #Injury #Transfer #Interview #Statistics.
+		- Запрещено ставить #Goal, если в строке нет явных признаков гола (счёт вида "x - y", минуты "45'", глаголов score/scored/goal/GOL и т.п.). 
+		- Для цитат/интервью/пресс-конференций выбирай #Interview.
+		- Для таблиц, статистики, графиков, чисел, данных, рейтингов выбирай #Statistics.
+		- Подсказки: слова вроде "says", "quote", кавычки с речью игрока/тренера, метки IG/Instagram обычно означают интервью/цитату → #Interview.
+		- Подсказки: слова "table", "stats", "statistics", "top", "ranking", "data", "numbers", таблицы с данными → #Statistics.
+		- Порядок тегов: команды → игроки → событие.
+		- Если команд/игроков нет — выбери 1–3 ключевых тега по смыслу + событие.
 
-			Примеры:
-			Annecy 1-0 Caen - Yohann Demoncy 13'
-			#Annecy #Caen #YohannDemoncy #Goal
+		Примеры:
+		Annecy 1-0 Caen - Yohann Demoncy 13'
+		#Annecy #Caen #YohannDemoncy #Goal
 
-			Bernardo Silva: "We must improve before derby"
-			#BernardoSilva #Interview
+		Bernardo Silva: "We must improve before derby"
+		#BernardoSilva #Interview
 
-			Hammarby vs Häcken: Ultra Boys protest...
-			#Hammarby #Hacken #UltraBoys #Interview
+		Hammarby vs Häcken: Ultra Boys protest...
+		#Hammarby #Hacken #UltraBoys #Interview
 
-			Теперь ответь для моей строки:
+		Top 10 goalscorers in La Liga this season
+		#LaLiga #Statistics
+
+		Теперь ответь для моей строки:
 `;
 
 					try {

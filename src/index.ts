@@ -707,8 +707,8 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 		});
 
 		try {
-			// Use shorter timeout and domcontentloaded for faster results
-			await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+			// Use very short timeout - we only need to capture network requests
+			await page.goto(streamUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
 			// If we found video URL during page load, return immediately
 			if (foundEarly && finalStreamUrl) {
@@ -721,17 +721,21 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 				log('resolve:error-but-found', { url: shortUrl(finalStreamUrl) });
 				return finalStreamUrl;
 			}
-			log('resolve:goto-error', { error: String(e).slice(0, 100) });
+			// WebSocket errors are common - log but don't spam
+			const errStr = String(e);
+			if (!errStr.includes('Websocket') && !errStr.includes('WebSocket')) {
+				log('resolve:goto-error', { error: errStr.slice(0, 100) });
+			}
 		}
 
 		// Only continue searching if not found yet
 		if (!finalStreamUrl) {
 			try {
-				const req = await page.waitForRequest((req) => isMp4Url(req.url()), { timeout: 8000 });
+				const req = await page.waitForRequest((req) => isMp4Url(req.url()), { timeout: 5000 });
 				finalStreamUrl = req.url();
 				log('resolve:found-wait', { url: shortUrl(finalStreamUrl) });
 			} catch (_) {
-				// ignore timeout
+				// ignore timeout - just move on
 			}
 		}
 
@@ -786,11 +790,16 @@ const getFinalStreamUrl = async (env: Env, streamUrl: string): Promise<string | 
 		// Return whatever we found even if error occurred
 		return finalStreamUrl;
 	} finally {
-		// Always close browser to free resources
+		// Always close browser to free resources - do it aggressively
 		try {
-			await browser.close();
+			// Set a timeout for closing to avoid hanging
+			await Promise.race([browser.close(), new Promise((_, reject) => setTimeout(() => reject(new Error('Close timeout')), 3000))]);
 		} catch (e) {
-			log('resolve:close-error', { error: String(e).slice(0, 50) });
+			// Suppress WebSocket errors during close - they're expected
+			const errStr = String(e);
+			if (!errStr.includes('Websocket') && !errStr.includes('WebSocket') && !errStr.includes('Close timeout')) {
+				log('resolve:close-error', { error: errStr.slice(0, 50) });
+			}
 		}
 	}
 };

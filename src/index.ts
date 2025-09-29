@@ -430,7 +430,7 @@ export default {
 						const finalIsYoutube = videoUrl.includes('googlevideo.com/videoplayback');
 						const finalIsVideoUrl = finalIsMp4 || finalIsYoutube;
 						const finalIsDash = videoUrl.includes('DASH_');
-						const shouldSendVideo = finalIsVideoUrl && isValidVideo && (!finalIsDash || retriesLeft <= 1);
+						let shouldSendVideo = finalIsVideoUrl && isValidVideo && (!finalIsDash || retriesLeft <= 1);
 
 						// Check if source is trusted before sending
 						const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
@@ -438,11 +438,19 @@ export default {
 						const isTrustedSource = isRedditVideo || isYouTubeVideo;
 
 						// For non-trusted sources, retry instead of sending (they often fail in Telegram)
+						// But on last attempt (retriesLeft <= 1), send as text with player link
 						if (shouldSendVideo && !isTrustedSource && retriesLeft > 1) {
 							log('skip:untrusted-source', { key, retriesLeft, url: shortUrl(videoUrl), reason: 'external-url-retry' });
 							await env.PROCESSED_POSTS_KV.put(key, (retriesLeft - 1).toString(), { expirationTtl: 604800 });
 							await env.PROCESSED_POSTS_KV.delete(mediaKey);
 							continue;
+						}
+
+						// On last attempt with untrusted source, send as text (will be handled in else branch)
+						if (shouldSendVideo && !isTrustedSource && retriesLeft <= 1) {
+							log('untrusted:last-attempt', { key, url: shortUrl(videoUrl), reason: 'send-as-text' });
+							// Don't send as video, fall through to text message
+							shouldSendVideo = false;
 						}
 
 						if (shouldSendVideo && isTrustedSource) {

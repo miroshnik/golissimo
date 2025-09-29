@@ -739,18 +739,55 @@ const validateVideoUrl = async (url: string): Promise<boolean> => {
 			return false;
 		}
 
-		// Accept video/* content types
-		if (contentType.includes('video/')) {
-			log('validate:ok-video', { url: shortUrl(url), contentType, size: contentLength });
-			return true;
-		}
+		// Don't trust Content-Type alone - some servers return video/mp4 on HEAD but HTML on GET
+		// Download first 1KB to verify it's really a video
+		if (contentType.includes('video/') || contentType.includes('application/octet-stream')) {
+			try {
+				const getResponse = await fetch(url, {
+					method: 'GET',
+					headers: {
+						'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)',
+						Accept: 'video/*,application/octet-stream',
+						Range: 'bytes=0-1023', // First 1KB
+					},
+					redirect: 'follow',
+				});
 
-		// Accept application/octet-stream only if Content-Length suggests video (> 100KB)
-		if (contentType.includes('application/octet-stream')) {
-			const size = contentLength ? parseInt(contentLength, 10) : 0;
-			const isLargeEnough = size > 100000; // > 100KB
-			log('validate:octet-stream', { url: shortUrl(url), size, isLargeEnough });
-			return isLargeEnough;
+				if (!getResponse.ok && getResponse.status !== 206) {
+					log('validate:get-failed', { url: shortUrl(url), status: getResponse.status });
+					return false;
+				}
+
+				const actualContentType = (getResponse.headers.get('content-type') || '').toLowerCase();
+
+				// Check if actual response is HTML
+				if (actualContentType.includes('text/html') || actualContentType.includes('text/plain')) {
+					log('validate:get-html', { url: shortUrl(url), actualContentType });
+					return false;
+				}
+
+				// Read first bytes to check if it looks like HTML
+				const chunk = await getResponse.text();
+				if (chunk.trim().startsWith('<') || chunk.includes('<!DOCTYPE') || chunk.includes('<html')) {
+					log('validate:body-html', { url: shortUrl(url), preview: chunk.slice(0, 50) });
+					return false;
+				}
+
+				// Check size for octet-stream
+				if (contentType.includes('application/octet-stream')) {
+					const size = contentLength ? parseInt(contentLength, 10) : 0;
+					if (size < 100000) {
+						log('validate:too-small', { url: shortUrl(url), size });
+						return false;
+					}
+				}
+
+				log('validate:ok-video', { url: shortUrl(url), contentType, actualContentType, size: contentLength });
+				return true;
+			} catch (rangeError) {
+				log('validate:range-failed', { url: shortUrl(url), error: String(rangeError).slice(0, 50) });
+				return false;
+			}
 		}
 
 		// Reject if Content-Type is missing or unknown

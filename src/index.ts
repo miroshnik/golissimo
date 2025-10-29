@@ -357,7 +357,11 @@ export default {
 				// 1. Non-MP4 URLs (always need resolution via Puppeteer)
 				// 2. URLs that look like MP4 but might be HTML pages (check first, then resolve if HTML)
 				if (videoUrl && !isDirectImageUrl(videoUrl)) {
-					const isTrustedSource = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com') || videoUrl.includes('googlevideo.com');
+					const isTrustedSource =
+						videoUrl.includes('v.redd.it') ||
+						videoUrl.includes('reddit.com') ||
+						videoUrl.includes('googlevideo.com') ||
+						videoUrl.includes('streamin.one');
 					const isYoutube = videoUrl.includes('youtube') || videoUrl.includes('youtu.be');
 					const isMp4Url = videoUrl.includes('.mp4');
 
@@ -545,13 +549,19 @@ export default {
 						// Validate that URL actually points to a video file
 						let isValidVideo = false;
 						if (isVideoUrl) {
-							// Quick check: Reddit and Streamain CDN are trusted without validation
+							// Quick check: Reddit, Streamain, and Streamin CDNs are trusted without validation
 							const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
 							const isStreamainVideo = videoUrl.includes('streamain.com');
-							const isTrustedDomain = isRedditVideo || isStreamainVideo;
+							const isStreaminVideo = videoUrl.includes('streamin.one');
+							const isTrustedDomain = isRedditVideo || isStreamainVideo || isStreaminVideo;
 
 							if (isTrustedDomain) {
-								log('validate:trusted', { url: shortUrl(videoUrl), reddit: isRedditVideo, streamain: isStreamainVideo });
+								log('validate:trusted', {
+									url: shortUrl(videoUrl),
+									reddit: isRedditVideo,
+									streamain: isStreamainVideo,
+									streamin: isStreaminVideo,
+								});
 								isValidVideo = true;
 							} else {
 								// YouTube and other URLs must be validated (they may expire, require auth, etc.)
@@ -578,10 +588,11 @@ export default {
 								const newIsMp4 = videoUrl.endsWith('.mp4');
 								const newIsYoutube = videoUrl.includes('googlevideo.com/videoplayback');
 								const newIsDash = videoUrl.includes('DASH_');
-								// Re-validate the new URL (Reddit and Streamain are trusted)
+								// Re-validate the new URL (Reddit, Streamain, and Streamin are trusted)
 								const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
 								const isStreamainVideo = videoUrl.includes('streamain.com');
-								if (isRedditVideo || isStreamainVideo) {
+								const isStreaminVideo = videoUrl.includes('streamin.one');
+								if (isRedditVideo || isStreamainVideo || isStreaminVideo) {
 									isValidVideo = true;
 								} else if (newIsMp4 || newIsYoutube) {
 									// YouTube and other URLs must be validated (they often expire or need auth)
@@ -613,7 +624,8 @@ export default {
 						const isRedditVideo = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com');
 						const isYouTubeVideo = videoUrl.includes('googlevideo.com');
 						const isStreamainCDN = videoUrl.includes('streamain.com'); // Works well with Telegram
-						const isTrustedSource = isRedditVideo || isYouTubeVideo || isStreamainCDN;
+						const isStreaminCDN = videoUrl.includes('streamin.one'); // Works well with Telegram
+						const isTrustedSource = isRedditVideo || isYouTubeVideo || isStreamainCDN || isStreaminCDN;
 
 						// For non-trusted sources, retry instead of sending (they often fail in Telegram)
 						// But on last attempt (retriesLeft <= 1), send as text with player link
@@ -638,7 +650,15 @@ export default {
 								method: logMsg,
 								video: shortUrl(videoUrl),
 								trusted: true,
-								source: isRedditVideo ? 'reddit' : isStreamainCDN ? 'streamain' : isYouTubeVideo ? 'youtube' : 'other',
+								source: isRedditVideo
+									? 'reddit'
+									: isStreamainCDN
+									? 'streamain'
+									: isStreaminCDN
+									? 'streamin'
+									: isYouTubeVideo
+									? 'youtube'
+									: 'other',
 								thumb: shortUrl(thumbnailUrl),
 							});
 

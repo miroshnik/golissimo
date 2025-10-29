@@ -48,53 +48,6 @@ export default {
 			const deleted = await clearKvPrefix(env, prefix);
 			return Response.json({ deleted, prefix });
 		}
-		if (url.pathname === '/proxy') {
-			const src = url.searchParams.get('url') || '';
-			try {
-				const u = new URL(src);
-				if (u.protocol !== 'http:' && u.protocol !== 'https:') {
-					return new Response('Bad Request', { status: 400 });
-				}
-				const resp = await fetch(u.toString(), {
-					headers: {
-						'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-						Accept: 'video/*,*/*',
-						Referer: u.origin,
-					},
-					cf: { cacheTtl: 300, cacheEverything: true },
-				});
-
-				if (!resp.ok) {
-					log('proxy:error', { url: shortUrl(src), status: resp.status });
-					return new Response('Upstream Error', { status: resp.status });
-				}
-
-				const headers = new Headers();
-				// Force video content type if original is wrong
-				const originalContentType = resp.headers.get('content-type') || '';
-				if (originalContentType.includes('text/html')) {
-					// Server returned HTML - this won't work for Telegram
-					log('proxy:html-detected', { url: shortUrl(src), contentType: originalContentType });
-					return new Response('Not a video', { status: 400 });
-				}
-
-				// Copy important headers
-				headers.set('Content-Type', originalContentType || 'video/mp4');
-				headers.set('Cache-Control', 'public, max-age=300');
-				headers.set('Accept-Ranges', resp.headers.get('accept-ranges') || 'bytes');
-
-				const contentLength = resp.headers.get('content-length');
-				if (contentLength) {
-					headers.set('Content-Length', contentLength);
-				}
-
-				log('proxy:success', { url: shortUrl(src), contentType: originalContentType, size: contentLength });
-				return new Response(resp.body, { status: resp.status, headers });
-			} catch (e) {
-				log('proxy:exception', { url: shortUrl(src), error: String(e).slice(0, 100) });
-				return new Response('Bad Request', { status: 400 });
-			}
-		}
 		if (url.pathname === '/player') {
 			const video = url.searchParams.get('video') || '';
 			const audio = url.searchParams.get('audio') || '';
@@ -262,16 +215,44 @@ export default {
 
 				log('process:start', { key, title });
 
-				// Try to resolve non-MP4 URLs (including YouTube, external sites, etc.)
-				if (videoUrl && !isDirectImageUrl(videoUrl) && !videoUrl.includes('.mp4')) {
+				// Try to resolve video URLs:
+				// 1. Non-MP4 URLs (always need resolution via Puppeteer)
+				// 2. URLs that look like MP4 but might be HTML pages (check first, then resolve if HTML)
+				if (videoUrl && !isDirectImageUrl(videoUrl)) {
+					const isTrustedSource = videoUrl.includes('v.redd.it') || videoUrl.includes('reddit.com') || videoUrl.includes('googlevideo.com');
 					const isYoutube = videoUrl.includes('youtube') || videoUrl.includes('youtu.be');
-					log('resolve:open', { key, url: shortUrl(videoUrl), isYoutube });
-					const resolved = await getFinalStreamUrl(env, videoUrl);
-					if (resolved && resolved !== videoUrl) {
-						videoUrl = resolved;
-						log('resolve:done', { key, url: shortUrl(videoUrl) });
+					const isMp4Url = videoUrl.includes('.mp4');
+
+					if (isMp4Url && isTrustedSource) {
+						// Trusted MP4 URLs - no resolution needed
+						log('resolve:trusted-mp4', { key, url: shortUrl(videoUrl) });
+					} else if (isMp4Url && !isTrustedSource) {
+						// MP4 URL from untrusted source - might be HTML, validate first
+						log('resolve:check-mp4', { key, url: shortUrl(videoUrl) });
+						const isValid = await validateVideoUrl(videoUrl);
+						if (!isValid) {
+							// URL looks like MP4 but returns HTML - resolve via Puppeteer
+							log('resolve:mp4-is-html', { key, url: shortUrl(videoUrl), trying: 'puppeteer' });
+							const resolved = await getFinalStreamUrl(env, videoUrl);
+							if (resolved && resolved !== videoUrl) {
+								videoUrl = resolved;
+								log('resolve:done', { key, url: shortUrl(videoUrl) });
+							} else {
+								log('resolve:no-change', { key, url: shortUrl(videoUrl) });
+							}
+						} else {
+							log('resolve:valid-mp4', { key, url: shortUrl(videoUrl) });
+						}
 					} else {
-						log('resolve:no-change', { key, url: shortUrl(videoUrl) });
+						// Non-MP4 URLs (including YouTube) - always resolve via Puppeteer
+						log('resolve:open', { key, url: shortUrl(videoUrl), isYoutube });
+						const resolved = await getFinalStreamUrl(env, videoUrl);
+						if (resolved && resolved !== videoUrl) {
+							videoUrl = resolved;
+							log('resolve:done', { key, url: shortUrl(videoUrl) });
+						} else {
+							log('resolve:no-change', { key, url: shortUrl(videoUrl) });
+						}
 					}
 				}
 

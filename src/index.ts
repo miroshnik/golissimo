@@ -48,6 +48,69 @@ export default {
 			const deleted = await clearKvPrefix(env, prefix);
 			return Response.json({ deleted, prefix });
 		}
+		if (url.pathname === '/proxy') {
+			// Handle CORS preflight
+			if (request.method === 'OPTIONS') {
+				return new Response(null, {
+					status: 204,
+					headers: {
+						'Access-Control-Allow-Origin': '*',
+						'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+						'Access-Control-Allow-Headers': 'Range',
+						'Access-Control-Max-Age': '86400',
+					},
+				});
+			}
+			// Proxy endpoint to bypass CORS for video/audio resources
+			const targetUrl = url.searchParams.get('url');
+			if (!targetUrl) {
+				return new Response('Bad Request: url parameter required', { status: 400 });
+			}
+			try {
+				const target = new URL(targetUrl);
+				// Get Range header if present (for video seeking)
+				const range = request.headers.get('range');
+				const headers: HeadersInit = {
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+					Accept: '*/*',
+				};
+				if (range) {
+					headers['Range'] = range;
+				}
+				const response = await fetch(targetUrl, {
+					method: request.method,
+					headers,
+					redirect: 'follow',
+				});
+				// Create new response with CORS headers
+				const corsHeaders = new Headers(response.headers);
+				corsHeaders.set('Access-Control-Allow-Origin', '*');
+				corsHeaders.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+				corsHeaders.set('Access-Control-Allow-Headers', 'Range');
+				corsHeaders.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+				// Preserve important headers
+				if (response.headers.get('content-type')) {
+					corsHeaders.set('content-type', response.headers.get('content-type')!);
+				}
+				if (response.headers.get('content-length')) {
+					corsHeaders.set('content-length', response.headers.get('content-length')!);
+				}
+				if (response.headers.get('content-range')) {
+					corsHeaders.set('content-range', response.headers.get('content-range')!);
+				}
+				if (response.headers.get('accept-ranges')) {
+					corsHeaders.set('accept-ranges', response.headers.get('accept-ranges')!);
+				}
+				return new Response(response.body, {
+					status: response.status,
+					statusText: response.statusText,
+					headers: corsHeaders,
+				});
+			} catch (error) {
+				log('proxy:error', { url: shortUrl(targetUrl || ''), error: String(error).slice(0, 100) });
+				return new Response('Proxy Error: ' + String(error), { status: 500 });
+			}
+		}
 		if (url.pathname === '/player') {
 			const video = url.searchParams.get('video') || '';
 			const audio = url.searchParams.get('audio') || '';
@@ -73,23 +136,98 @@ export default {
 				(function(){
 					const v = document.getElementById('v');
 					const a = document.getElementById('a');
-					const params = new URL(location.href).searchParams;
-					const src = params.get('video') || '';
+					// Extract video URL from query string manually to handle URLs with query params
+					const fullUrl = location.href;
+					const queryStart = fullUrl.indexOf('?');
+					let src = '';
+					let audioSrc = '';
+					if (queryStart !== -1) {
+						const queryString = fullUrl.substring(queryStart + 1);
+						// Find 'video=' parameter start
+						const videoIdx = queryString.indexOf('video=');
+						if (videoIdx === 0) {
+							// video is first parameter
+							const videoPart = queryString.substring(6); // 'video=' is 6 chars
+							// Find where video URL ends (before '&audio=' or end of string)
+							const audioIdx = videoPart.indexOf('&audio=');
+							const videoUrlEncoded = audioIdx !== -1 ? videoPart.substring(0, audioIdx) : videoPart;
+							// Decode URL
+							try {
+								src = decodeURIComponent(videoUrlEncoded);
+								// Extract audio if present
+								if (audioIdx !== -1) {
+									const audioPart = videoPart.substring(audioIdx + 7); // '&audio=' is 7 chars
+									try {
+										audioSrc = decodeURIComponent(audioPart);
+									} catch (e) {
+										audioSrc = '';
+									}
+								}
+							} catch (e) {
+								// If decode fails, try searchParams as fallback
+								const params = new URL(location.href).searchParams;
+								src = params.get('video') || '';
+								audioSrc = params.get('audio') || '';
+							}
+						} else {
+							// Fallback to searchParams
+							const params = new URL(location.href).searchParams;
+							src = params.get('video') || '';
+							audioSrc = params.get('audio') || '';
+						}
+					} else {
+						// No query string, no video
+						src = '';
+						audioSrc = '';
+					}
+					// Check if URL needs CORS proxy (different origin) - do this BEFORE setting src
+					let finalSrc = src;
+					try {
+						const srcUrl = new URL(src);
+						const currentOrigin = location.origin;
+						// If different origin, use proxy
+						if (srcUrl.origin !== currentOrigin && !src.startsWith('/proxy?url=')) {
+							finalSrc = '/proxy?url=' + encodeURIComponent(src);
+							console.log('Player: Using proxy for CORS:', finalSrc);
+						}
+					} catch (e) {
+						// If URL parsing fails, use original src
+						console.log('Player: URL parse failed, using original src');
+						finalSrc = src;
+					}
 					// Setup source with HLS.js for Chrome
-					if (src.endsWith('.m3u8')) {
+					if (finalSrc.endsWith('.m3u8')) {
 						if (window.Hls && Hls.isSupported()) {
 							const hls = new Hls({ lowLatencyMode: true, backBufferLength: 60 });
-							hls.loadSource(src);
+							hls.loadSource(finalSrc);
 							hls.attachMedia(v);
 							hls.on(Hls.Events.MANIFEST_PARSED, ()=>{ v.play().catch(()=>{}); });
 						} else if (v.canPlayType && v.canPlayType('application/vnd.apple.mpegurl')) {
-							v.src = src;
+							v.src = finalSrc;
 						} else {
-							v.src = src;
+							v.src = finalSrc;
 						}
 					} else {
-						v.src = src;
+						v.src = finalSrc;
 					}
+					// Set audio source if provided
+					if (audioSrc && a) {
+						// Check if audio also needs proxy
+						try {
+							const audioUrl = new URL(audioSrc);
+							const currentOrigin = location.origin;
+							if (audioUrl.origin !== currentOrigin && !audioSrc.startsWith('/proxy?url=')) {
+								audioSrc = '/proxy?url=' + encodeURIComponent(audioSrc);
+							}
+						} catch (e) {
+							// Use original if URL parse fails
+						}
+						a.src = audioSrc;
+						a.style.display = '';
+					}
+					// Log for debugging
+					console.log('Player: video src =', v.src);
+					if (audioSrc) console.log('Player: audio src =', audioSrc);
 					// Autoplay: keep both muted to satisfy browser policies
 					if (a && a.src) { a.muted = true; a.play().catch(()=>{}); }
 					v.play().catch(()=>{});
